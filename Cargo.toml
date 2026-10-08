@@ -1,0 +1,59 @@
+[package]
+name = "hiro-proxy"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94.1"
+description = "Attested confidential gateway for Hiro"
+license = "AGPL-3.0-only"
+repository = "https://github.com/cypherpunklabs-ai/hiro-proxy"
+
+[dependencies]
+transport = { path = "../cypherpunk-client/crates/transport", default-features = false }
+dstack-sdk = "=0.1.3"
+ed25519-dalek = { version = "3.0.0", features = ["zeroize"] }
+k256 = { version = "=0.14.0", features = ["ecdsa"] }
+hex = "=0.4.3"
+zeroize = "=1.9.1"
+
+anyhow = "1.0.104"
+base64 = "0.23.1"
+futures-util = "0.3"
+eventsource-stream = "=0.2.3"
+governor = "0.10.4"
+hmac = "0.13"
+chrono = { version = "0.4", features = ["serde"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "chrono"] }
+jsonwebtoken = { version = "=11.0.0", default-features = false, features = ["aws_lc_rs", "use_pem"] }
+secrecy = "0.10"
+thiserror = "2"
+serde_json = "1"
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "query", "rustls-no-provider", "stream"] }
+sha2 = "0.11.0"
+subtle = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+axum = { version = "0.8.9", features = ["http2", "json", "macros", "ws"] }
+aci-protocol = { git = "https://github.com/Dstack-TEE/private-ai-gateway.git", rev = "a991c08553cbd0638199abfd6eace9c83ee0a891" }
+aci-verify = { git = "https://github.com/Dstack-TEE/private-ai-gateway.git", rev = "a991c08553cbd0638199abfd6eace9c83ee0a891" }
+dcap-qvl = { version = "=0.6.5", default-features = false, features = ["std", "report", "rustcrypto", "default-x509"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+x509-parser = "0.18"
+getrandom = "=0.2.17"
+async-stream = "=0.3.6"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tower = { version = "0.5", features = ["util"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = "symbols"
+
+[lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
