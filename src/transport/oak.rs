@@ -1,6 +1,7 @@
 //! WSS carrier for the shared Oak protocol. Private dispatch never crosses a socket.
+use crate::attestation::gate::Gate;
 use crate::services::inference::Service;
-use ::transport::{
+use crate::transport::{
     Flow, ServerChannel, Side,
     wire::{self, record::Kind},
 };
@@ -18,8 +19,7 @@ use axum::{
 };
 use ed25519_dalek::SigningKey;
 use futures_util::StreamExt;
-use serde_json::Value;
-use std::{io::Read, path::PathBuf, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 use tokio::{
     sync::{Semaphore, mpsc},
     time::{Instant, timeout, timeout_at},
@@ -31,7 +31,7 @@ pub struct Gateway {
     service: Arc<Service>,
     binding: Arc<SigningKey>,
     inner: Router,
-    evidence_path: PathBuf,
+    evidence: Gate,
     slots: Arc<Semaphore>,
     quotes: Arc<Semaphore>,
 }
@@ -43,15 +43,13 @@ impl Gateway {
         service: Arc<Service>,
         binding: Arc<SigningKey>,
         inner: Router,
-        evidence_path: PathBuf,
+        evidence: Gate,
     ) -> anyhow::Result<Self> {
-        // Public release/collateral/KMS artifacts only, never a private key file.
-        read_evidence(&evidence_path)?;
         Ok(Self {
             service,
             binding,
             inner,
-            evidence_path,
+            evidence,
             slots: Arc::new(Semaphore::new(8)),
             quotes: Arc::new(Semaphore::new(2)),
         })
@@ -62,47 +60,30 @@ impl Gateway {
             .with_state(self)
     }
 }
-fn read_evidence(path: &PathBuf) -> anyhow::Result<Value> {
-    let mut bytes = Vec::new();
-    std::fs::File::open(path)?
-        .take(4 * 1024 * 1024 + 1)
-        .read_to_end(&mut bytes)?;
-    ensure!(
-        bytes.len() <= 4 * 1024 * 1024,
-        "Oak evidence metadata exceeds limit"
-    );
-    let value: Value = serde_json::from_slice(&bytes)?;
-    let obj = value
-        .as_object()
-        .context("Oak evidence metadata must be an object")?;
-    ensure!(
-        obj.len() == 5
-            && value["schema"] == 1
-            && ["collateral", "release", "policy", "kms"]
-                .iter()
-                .all(|key| value[*key].is_object()),
-        "invalid Oak evidence metadata fields"
-    );
-    Ok(value)
-}
 async fn upgrade(
     State(state): State<Gateway>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
+    if !state.evidence.ready().await {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
     if !headers
         .get("sec-websocket-protocol")
         .and_then(|h| h.to_str().ok())
-        .is_some_and(|h| h.split(',').any(|p| p.trim() == ::transport::SUBPROTOCOL))
+        .is_some_and(|h| {
+            h.split(',')
+                .any(|p| p.trim() == crate::transport::SUBPROTOCOL)
+        })
     {
         return StatusCode::BAD_REQUEST.into_response();
     }
     let Ok(permit) = state.slots.clone().try_acquire_owned() else {
         return StatusCode::TOO_MANY_REQUESTS.into_response();
     };
-    ws.protocols([::transport::SUBPROTOCOL])
-        .max_message_size(::transport::MAX_FRAME)
-        .max_frame_size(::transport::MAX_FRAME)
+    ws.protocols([crate::transport::SUBPROTOCOL])
+        .max_message_size(crate::transport::MAX_FRAME)
+        .max_frame_size(crate::transport::MAX_FRAME)
         .on_upgrade(move |socket| async move {
             let _permit = permit;
             // Errors deliberately omit peer payloads, tokens, evidence and key data.
@@ -145,17 +126,15 @@ async fn send(
 async fn serve(mut socket: WebSocket, state: Gateway) -> anyhow::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(900);
     let (mut channel, ()) = timeout(Duration::from_secs(60), async {
-        let nonce = ::transport::parse_initialize(&binary(&mut socket).await?)?;
+        let nonce = crate::transport::parse_initialize(&binary(&mut socket).await?)?;
         let _quote = state.quotes.clone().try_acquire_owned()?;
         let report = state.service.attestation_report(Some(nonce)).await?;
-        let path = state.evidence_path.clone();
-        let mut evidence = tokio::task::spawn_blocking(move || read_evidence(&path)).await??;
-        evidence
-            .as_object_mut()
-            .context("invalid metadata")?
-            .insert("report".into(), serde_json::to_value(report)?);
-        let (mut channel, flight) =
-            ServerChannel::new(serde_json::to_vec(&evidence)?, state.binding.clone())?;
+        let evidence = state
+            .evidence
+            .metadata()
+            .await?
+            .with_report(serde_json::to_value(report)?)?;
+        let (mut channel, flight) = ServerChannel::new(evidence, state.binding.clone())?;
         socket.send(Message::Binary(flight.into())).await?;
         for _ in 0..2 {
             if channel.is_open() {
@@ -167,11 +146,15 @@ async fn serve(mut socket: WebSocket, state: Gateway) -> anyhow::Result<()> {
             }
         }
         ensure!(channel.is_open(), "incomplete Oak handshake");
+        ensure!(
+            state.evidence.ready().await,
+            "evidence expired during handshake"
+        );
         Ok::<_, anyhow::Error>((channel, ()))
     })
     .await??;
     let mut flow = Flow::default();
-    for _ in 0..::transport::MAX_REQUESTS {
+    for _ in 0..crate::transport::MAX_REQUESTS {
         let bytes = timeout_at(
             deadline.min(Instant::now() + Duration::from_secs(60)),
             binary(&mut socket),
@@ -290,7 +273,7 @@ async fn operation(
             let bytes = pending.as_mut().context("missing chunk")?;
             let count = bytes
                 .len()
-                .min(::transport::MAX_CHUNK)
+                .min(crate::transport::MAX_CHUNK)
                 .min(flow.credit(Side::Server) as usize);
             let body = bytes.split_to(count).to_vec();
             let index = flow.index(Side::Server)?;
@@ -329,7 +312,7 @@ async fn operation(
         receipt: Vec::new(),
         session: Vec::new(),
     };
-    if ::transport::inference_route(&start.path) {
+    if crate::transport::inference_route(&start.path) {
         let proof = receipt_id.and_then(|id| state.service.take_completion(&id));
         let Some((receipt, session)) = proof else {
             send(
@@ -412,7 +395,7 @@ async fn dispatch(inner: Router, request: Request<Body>, tx: mpsc::Sender<Output
             return;
         };
         while !bytes.is_empty() {
-            let count = bytes.len().min(::transport::MAX_CHUNK);
+            let count = bytes.len().min(crate::transport::MAX_CHUNK);
             // copy_from_slice prevents a small queued slice retaining an entire huge allocation.
             let part = Bytes::copy_from_slice(&bytes.split_to(count));
             if tx.send(Output::Data(part)).await.is_err() {

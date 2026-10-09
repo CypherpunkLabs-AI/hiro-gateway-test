@@ -1,4 +1,5 @@
 /target/
+/bazel-*/
 .env
 .env.*
 !.env.example
@@ -8,4 +9,3 @@
 *.p12
 *.log
 .DS_Store
-

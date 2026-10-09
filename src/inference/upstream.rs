@@ -62,7 +62,7 @@ impl InferenceBackend {
     pub fn prepare(&self, request: UpstreamRequest) -> Result<PreparedRequest> {
         let path = request.path.as_deref().context("inference path required")?;
         ensure!(
-            ::transport::inference_route(path),
+            crate::transport::inference_route(path),
             "unsupported inference route"
         );
         ensure!(

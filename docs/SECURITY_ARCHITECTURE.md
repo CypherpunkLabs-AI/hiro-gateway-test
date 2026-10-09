@@ -42,10 +42,17 @@ KMS evidence. Client verification and durable rollback-state adoption precede
 acceptance of Oak's handshake binding. Noise NN alone is not authentication.
 No private request can be sent before both stages succeed.
 
-Only `/health` and `/v1/session` are public. Sensitive headers, request bodies,
+Only `/health`, `/ready` and `/v1/session` are public. Sensitive headers, request bodies,
 filenames, responses, receipts and cited sessions travel inside Oak. In-process
 inference/document dispatch is gated by the shared method/path/header allowlist.
 There is no gateway application router dependency.
+
+Supporting evidence is produced by the separate `evidence` command and verified
+again inside the proxy using the proxy-local verifier. Bootstrap public reports are
+available only through a filesystem-protected Unix socket; no key-derivation or
+application routes are exposed there. Independent rollback checkpoints, atomic
+publication, signed policy updates and bounded acceptance lifetimes gate readiness
+and new sessions. See [EVIDENCE_WORKER.md](EVIDENCE_WORKER.md).
 
 Ordered encrypted records, request identifiers, body digests, credit, terminal
 acknowledgements, expiry, cancellation and receipt/session checks enforce the

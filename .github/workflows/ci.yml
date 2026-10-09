@@ -12,9 +12,6 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
   rust:
     runs-on: ubuntu-latest
@@ -22,9 +19,15 @@ jobs:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           persist-credentials: false
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --frozen --all-targets -- -D warnings
-      - run: cargo test --frozen --all-targets
+      - run: sudo apt-get update && sudo apt-get install -y build-essential cmake pkg-config perl python3 unzip
+      - name: Install pinned Bazel
+        run: |
+          bash scripts/install-bazel "$RUNNER_TEMP/hiro-bin"
+          echo "$RUNNER_TEMP/hiro-bin" >> "$GITHUB_PATH"
+      - run: bazel build --config=release --lockfile_mode=error //:hiro-proxy
+      - run: bazel test --lockfile_mode=error //:format
+      - run: bazel build --lockfile_mode=error //:clippy --@rules_rust//:clippy_flag=-Dwarnings
+      - run: bazel test --lockfile_mode=error //:hiro_proxy_tests //:hiro_proxy_bin_tests
 
   container:
     runs-on: ubuntu-latest
@@ -38,4 +41,3 @@ jobs:
           context: .
           push: false
           platforms: linux/amd64
-

@@ -1,0 +1,8 @@
+build --@rules_rust//rust/toolchain/channel=nightly
+build --incompatible_strict_action_env
+build --action_env=PATH=/usr/local/bin:/usr/bin:/bin
+
+build:release --compilation_mode=opt
+build:release --@rules_rust//rust/settings:lto=thin
+build:release --@rules_rust//rust/settings:codegen_units=1
+build:release --strip=always

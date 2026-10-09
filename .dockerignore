@@ -1,8 +1,9 @@
 .git
 .github
 target
+**/target
+bazel-*
 .env*
 deploy
 docs
 *.md
-

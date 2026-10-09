@@ -19,8 +19,9 @@ and encrypted requests, uploads and response streams over WSS.
 - Inference and document handlers execute in-process after Oak decryption.
   The vision broker remains a separately authenticated private service.
 
-The sibling `cypherpunk-client` supplies shared Rust code, native/WASM bindings
-and the browser WSS adapter. Actual frontend wiring, native integration and
+The separately built `cypherpunk-client` supplies native/WASM bindings and the browser WSS adapter.
+The proxy owns its server transport in `src/transport` and evidence verification
+in `src/attestation/verification`; no SDK checkout is required to build the proxy. Actual frontend wiring, native integration and
 live-CVM validation remain separate launch work.
 
 ## Public endpoints
@@ -28,6 +29,7 @@ live-CVM validation remain separate launch work.
 | Route | Purpose |
 | --- | --- |
 | `GET /health` | Process health |
+| `GET /ready` | Application initialized and independently verified supporting evidence is current |
 | `GET /v1/session` | Oak upgrade; subprotocol `cypherpunk-session-v1` |
 
 All other public paths are absent, including direct inference/document POSTs,
@@ -98,6 +100,23 @@ Required configuration includes `DSTACK_ENDPOINT`, `PHALA_ACI_BASE_URL`,
 `PHALA_API_KEY`, `PHALA_ACI_ACCEPTED_SUBJECTS`,
 `PHALA_ACI_ACCEPTED_KMS_ROOT_KEYS`, `HIRO_SOURCE_REPOSITORY`,
 `HIRO_SOURCE_COMMIT`, and `HIRO_OAK_EVIDENCE_PATH`.
+
+## Evidence startup and refresh
+
+`hiro-proxy serve` starts a private Unix evidence interface before contacting
+application dependencies. `hiro-proxy evidence` runs the separately supervised
+worker using only public artifact configuration. The worker has no dstack socket
+or application credentials. Both processes use the proxy-local `src/attestation/verification`
+module with separate persistent rollback state.
+
+The proxy no longer requires an evidence file at process startup. `/ready` and
+new Oak sessions remain unavailable until the proxy independently verifies the
+worker's snapshot. Authenticated policy updates invalidate old acceptance; failed
+retrievals never overwrite complete evidence or extend its verified expiry.
+
+See [EVIDENCE_WORKER.md](docs/EVIDENCE_WORKER.md) for exact environment variables,
+Unix routes, signed artifact and KMS document contracts, and volume permissions.
+Release signing/publication and actual Phala deployment remain deployment work.
 See `src/config.rs` for validation. The dstack socket is normally
 `/var/run/dstack.sock`. Serve `/v1/session` over WSS using the CVM ingress.
 
@@ -118,7 +137,9 @@ enable ACI transport encryption.
 ## Dependencies and build
 
 `src/attestation/keys.rs` adapts the unmodified official dstack SDK. Oak cryptography
-comes from the pinned upstream source in the sibling client workspace.
+comes from unmodified upstream Bazel targets at revision
+`8fe08a5f80c768613e8287a5a50bb1dd80c6d978`. Bazel fetches that source outside this
+repository and verifies the archive digest in `MODULE.bazel`.
 
 The full `private-ai-gateway` crate is not a dependency. No gateway source is
 vendored or patched. The proxy uses these libraries directly:
@@ -131,7 +152,7 @@ vendored or patched. The proxy uses these libraries directly:
 - Oak Session: client-facing encrypted transport.
 
 `aci-protocol` and `aci-verify` are smaller crates published in the same upstream
-Git repository; Cargo still fetches that repository at the pinned revision. This
+Git repository; `crate_universe` fetches that repository at the pinned revision. This
 is not a dependency on the gateway application crate.
 
 `src/attestation/upstream.rs` owns upstream acceptance and bounded verification caching;
@@ -141,13 +162,28 @@ is not a dependency on the gateway application crate.
 `src/api/inference.rs` owns in-process routing; `src/services/inference.rs`
 coordinates verified responses; `src/storage/completions.rs` owns bounded proof/session storage.
 
-Building needs this source tree, the sibling client transport/vendor tree,
-the pinned Git dependencies and `protoc`. Container/deployment packaging is deferred;
-existing deployment files are templates, not a completed release.
+Build on Linux x86_64 with Bazel 8.5.1, a C/C++ compiler, CMake, Perl, Python 3,
+pkg-config, Git, curl and unzip:
+
+```sh
+bash scripts/install-bazel /tmp/hiro-bin
+/tmp/hiro-bin/bazel build --config=release --lockfile_mode=error //:hiro-proxy
+```
+
+The executable is `bazel-bin/hiro-proxy`. Oak supplies the pinned Rust nightly
+2026-04-11 toolchain and its component checksums, protobuf generation and session
+build rules. `Cargo.toml` and `Cargo.lock` describe the proxy's other dependencies;
+`crate_universe` generates their Bazel targets. Oak is connected directly in
+`BUILD.bazel`, so `cargo build` is not a supported build entry point. The proxy's
+`prost` target is shared with Oak to preserve the protobuf trait identity.
+
+Commit both `Cargo.lock` and `MODULE.bazel.lock` after intentional dependency
+updates. Docker and CI use the same Bazel release target with module lockfile
+updates disabled. A sibling client checkout is not required.
 
 ## Validation and launch work
 
-The proxy migration is checked with `cargo check`. Tests and lints are not run.
+The proxy build is checked with Bazel. Local tests and lints are not run.
 Compilation is not runtime security validation. The shared client source is unchanged.
 
 Before launch: complete application wiring, native adapters, genuine-CVM and
