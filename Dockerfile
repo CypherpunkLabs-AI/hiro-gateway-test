@@ -14,7 +14,8 @@ RUN bash scripts/install-bazel /usr/local/bin
 COPY MODULE.bazel MODULE.bazel.lock BUILD.bazel .bazelrc .bazelignore Cargo.toml Cargo.lock ./
 COPY src ./src
 
-RUN bazel build --config=release --lockfile_mode=error //:hiro-proxy \
+RUN --mount=type=cache,target=/root/.cache/bazel,sharing=locked \
+    bazel build --config=release --lockfile_mode=error //:hiro-proxy \
     && install -D -m 0755 bazel-bin/hiro-proxy /out/hiro-proxy
 
 FROM debian:bookworm-slim AS runtime

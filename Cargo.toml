@@ -30,6 +30,9 @@ governor = "0.10.4"
 hmac = "0.13"
 chrono = { version = "0.4", features = ["serde"] }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "chrono"] }
+# Bazel unifies host/target sqlx-core features; keep its Postgres Executor
+# implementation compatible with the resulting offline-enabled trait.
+sqlx-postgres = { version = "0.9", default-features = false, features = ["offline"] }
 jsonwebtoken = { version = "=11.0.0", default-features = false, features = ["aws_lc_rs", "use_pem"] }
 secrecy = "0.10"
 thiserror = "2"

@@ -182,10 +182,6 @@ fn recover(message: &[u8], encoded: &str) -> Result<VerifyingKey> {
     }
     let recovery = RecoveryId::from_byte(recovery).ok_or(Error::Custody)?;
     let signature = Signature::from_slice(&signature[..64]).map_err(|_| Error::Custody)?;
-    VerifyingKey::recover_from_digest(
-        Keccak256::new_with_prefix(message),
-        &signature,
-        recovery,
-    )
-    .map_err(|_| Error::Custody)
+    VerifyingKey::recover_from_digest(Keccak256::new_with_prefix(message), &signature, recovery)
+        .map_err(|_| Error::Custody)
 }

@@ -136,6 +136,21 @@ enable ACI transport encryption.
 
 ## Dependencies and build
 
+Pushes to `main` run the Bazel release build, formatting, Clippy and tests before
+publishing the Linux AMD64 image to `ghcr.io/<owner>/hiro-proxy`. Pull requests
+run checks and build the container without publishing. GitHub Actions authenticates
+to GHCR with its repository token; image publication requires package write access.
+
+Published images receive `sha-<full-commit>` and `build-<run-id>-<attempt>` tags.
+Deployment must use the immutable `image@sha256:...` reference. The workflow adds
+BuildKit provenance and an SBOM, signs SLSA build provenance using GitHub OIDC,
+publishes that attestation to GHCR, and verifies its source and workflow identity.
+Only after verification does it publish the `hiro-proxy-image-...` artifact with
+`images.lock.json` in the `hiro` repository's schema, digest/reference text files,
+the image provenance bundle, metadata signature and checksums. The deployment
+repository selects this image and independently verifies its provenance before
+assembling the Compose stack.
+
 `src/attestation/keys.rs` adapts the unmodified official dstack SDK. Oak cryptography
 comes from unmodified upstream Bazel targets at revision
 `8fe08a5f80c768613e8287a5a50bb1dd80c6d978`. Bazel fetches that source outside this
@@ -178,7 +193,8 @@ build rules. `Cargo.toml` and `Cargo.lock` describe the proxy's other dependenci
 `prost` target is shared with Oak to preserve the protobuf trait identity.
 
 Commit both `Cargo.lock` and `MODULE.bazel.lock` after intentional dependency
-updates. Docker and CI use the same Bazel release target with module lockfile
+updates. Update the Cargo lock explicitly before refreshing the Bazel lock;
+the Bazel build does not rewrite `Cargo.lock`. Docker and CI use the same Bazel release target with module lockfile
 updates disabled. A sibling client checkout is not required.
 
 ## Validation and launch work
