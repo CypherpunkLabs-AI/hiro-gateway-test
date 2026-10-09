@@ -47,5 +47,6 @@ rustfmt_test(
 
 rust_clippy(
     name = "clippy",
+    testonly = True,
     deps = [":hiro_proxy", ":hiro-proxy", ":hiro_proxy_tests", ":hiro_proxy_bin_tests"],
 )
