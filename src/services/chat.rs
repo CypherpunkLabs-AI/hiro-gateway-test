@@ -37,6 +37,10 @@ pub(crate) struct Admission {
 }
 
 impl ChatService {
+    /// Initialize inference admission and usage delivery.
+    ///
+    /// # Errors
+    /// Returns an error if the quota database or usage dispatcher cannot be initialized.
     pub async fn new(identity: Arc<Service>, config: Config) -> anyhow::Result<Self> {
         let db = PgPoolOptions::new()
             .max_connections(config.database_max_connections)
@@ -75,7 +79,6 @@ impl ChatService {
     }
 
     pub(crate) fn resolve_model(
-        &self,
         requested: Option<&str>,
         plan: UsagePlan,
     ) -> Result<&'static str, ApiError> {
@@ -93,7 +96,7 @@ impl ChatService {
         &self,
         user: &str,
         model: &str,
-        messages: Vec<Value>,
+        messages: &[Value],
         temperature: f32,
         max_tokens: u32,
     ) -> Result<Vec<u8>, ApiError> {

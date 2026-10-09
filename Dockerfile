@@ -13,6 +13,7 @@ RUN bash scripts/install-bazel /usr/local/bin
 
 COPY MODULE.bazel MODULE.bazel.lock BUILD.bazel .bazelrc .bazelignore Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY build ./build
 
 RUN --mount=type=cache,target=/root/.cache/bazel,sharing=locked \
     bazel build --config=release --lockfile_mode=error //:hiro-proxy \

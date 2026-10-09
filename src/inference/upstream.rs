@@ -49,6 +49,10 @@ pub(crate) fn validate_origin(origin: &str) -> Result<()> {
 }
 
 impl InferenceBackend {
+    /// Configure an inference backend with an HTTPS origin and credential.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid origin or empty credential.
     pub fn new(origin: &str, credential: String, connect: u64, read: u64) -> Result<Self> {
         validate_origin(origin)?;
         ensure!(!credential.is_empty(), "inference credential required");
@@ -59,6 +63,10 @@ impl InferenceBackend {
             read_timeout: Duration::from_secs(read),
         })
     }
+    /// Validate a bounded inference request before attestation and forwarding.
+    ///
+    /// # Errors
+    /// Returns an error for unsupported routes or headers, oversized bodies or invalid model JSON.
     pub fn prepare(&self, request: UpstreamRequest) -> Result<PreparedRequest> {
         let path = request.path.as_deref().context("inference path required")?;
         ensure!(
@@ -132,6 +140,10 @@ impl InferenceBackend {
             .await
             .context("attested inference connection failed")
     }
+    /// Forward an authorized request and expose its response stream.
+    ///
+    /// # Errors
+    /// Returns an error for expired or mismatched authority, TLS pin failure or request failure.
     pub async fn forward_stream_verified_prepared(
         &self,
         prepared: PreparedRequest,
@@ -158,6 +170,10 @@ impl InferenceBackend {
             body: Box::pin(body),
         })
     }
+    /// Forward an authorized request and read its bounded response.
+    ///
+    /// # Errors
+    /// Returns an error for failed authorization, transport failure or an oversized/interrupted response.
     pub async fn forward_verified_prepared(
         &self,
         prepared: PreparedRequest,

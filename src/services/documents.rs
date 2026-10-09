@@ -46,7 +46,7 @@ impl DocumentGateway {
                 .no_proxy()
                 .redirect(reqwest::redirect::Policy::none())
                 .connect_timeout(Duration::from_secs(3))
-                .timeout(Duration::from_secs(600))
+                .timeout(Duration::from_mins(10))
                 .build()?,
             convert_url: url,
             slots: Arc::new(Semaphore::new(2)),

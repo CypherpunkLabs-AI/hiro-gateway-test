@@ -11,7 +11,7 @@ fn hex_bytes(value: &Value, limit: usize) -> anyhow::Result<Vec<u8>> {
     Ok(hex::decode(encoded)?)
 }
 
-pub(super) fn decode_meta(meta: Value) -> anyhow::Result<Value> {
+pub(super) fn decode_meta(meta: &Value) -> anyhow::Result<Value> {
     ensure!(
         meta["is_dev"] == false && meta["allow_any_upgrade"] == false,
         "KMS must use production mode and restricted upgrades"

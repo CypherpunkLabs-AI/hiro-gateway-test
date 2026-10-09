@@ -141,9 +141,14 @@ async fn release_key(
 }
 
 impl OakKeys {
+    /// Request a dstack quote bound to the supplied report data.
+    ///
+    /// # Errors
+    /// Returns an error if dstack quote retrieval or decoding fails.
     pub async fn get_quote(&self, report_data: [u8; 32]) -> anyhow::Result<Quote> {
         self.quote(report_data_slot(report_data)).await
     }
+    #[must_use]
     pub fn receipt_keys(&self) -> Vec<KeyedPublicKey> {
         vec![KeyedPublicKey {
             key_id: RECEIPT_ID.into(),
@@ -151,12 +156,17 @@ impl OakKeys {
             public_key_hex: hex::encode(self.receipt.verifying_key().as_bytes()),
         }]
     }
+    /// Sign a receipt using its identified signing key.
+    ///
+    /// # Errors
+    /// Returns an error if the requested key ID is unknown.
     pub fn sign_receipt(&self, id: &str, payload: &[u8]) -> anyhow::Result<Vec<u8>> {
         if id != RECEIPT_ID {
             return Err(anyhow::anyhow!("unknown receipt key"));
         }
         Ok(self.receipt.sign(payload).to_bytes().to_vec())
     }
+    #[must_use]
     pub fn binding_keys(&self) -> Vec<KeyedPublicKey> {
         vec![KeyedPublicKey {
             key_id: BINDING_ID.into(),
@@ -164,6 +174,7 @@ impl OakKeys {
             public_key_hex: hex::encode(self.binding.verifying_key().as_bytes()),
         }]
     }
+    #[must_use]
     pub fn key_custody_evidence(&self) -> Value {
         self.custody.clone()
     }

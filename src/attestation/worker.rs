@@ -43,6 +43,10 @@ fn https(value: &str) -> anyhow::Result<Url> {
 }
 
 impl Config {
+    /// Load worker paths and evidence source URLs.
+    ///
+    /// # Errors
+    /// Returns an error for missing settings or invalid evidence source URLs.
     pub fn from_env() -> anyhow::Result<Self> {
         let release_base = https(&required("HIRO_RELEASE_BASE_URL")?)?;
         ensure!(
@@ -112,6 +116,10 @@ impl dcap_qvl::http::HttpClient for CollateralHttp {
     }
 }
 
+/// Request a nonce-bound report over the private socket client.
+///
+/// # Errors
+/// Returns an error for HTTP failure, oversized responses or invalid JSON.
 pub async fn local_report(client: &Client, nonce: &str) -> anyhow::Result<Value> {
     let response = client
         .get("http://localhost/v1/report")
@@ -132,6 +140,14 @@ fn quote(value: &Value) -> anyhow::Result<Vec<u8>> {
 /// Foreground worker, supervised independently by Compose. Failed attempts never
 /// replace evidence.json. Signed policy advances are published separately so a
 /// revocation is not hidden by a later release/collateral retrieval failure.
+/// Refresh and publish verified supporting evidence until shutdown.
+///
+/// # Errors
+/// Returns an error for invalid configuration, authority initialization or fatal local state failures.
+#[expect(
+    clippy::too_many_lines,
+    reason = "Keep refresh, policy revocation, publication and shutdown ordering together"
+)]
 pub async fn run(config: Config) -> anyhow::Result<()> {
     ensure!(
         config.output.is_absolute() && config.socket.is_absolute(),
@@ -181,7 +197,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
                 fetch(&network, release_url),
                 fetch(&network, config.kms.clone())
             )?;
-            let mut kms = super::kms::decode_meta(kms_meta)?;
+            let mut kms = super::kms::decode_meta(&kms_meta)?;
             let local_quote = quote(&report["attestation"]["evidence"]["quote"])?;
             let kms_quote = quote(&kms["quote"])?;
             let collateral_client = dcap_qvl::collateral::CollateralClient::<
@@ -225,30 +241,27 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
             _ = terminate.recv() => return stop(&config),
             _ = tokio::signal::ctrl_c() => return stop(&config),
         };
-        let delay = match result {
-            Ok(Ok(validity)) => {
-                let delay = (validity.remaining() / 3)
-                    .min(Duration::from_secs(30))
-                    .max(Duration::from_millis(100));
-                current = Some(validity);
-                failures = 0;
-                tracing::info!("verified supporting evidence published");
-                delay
+        let delay = if let Ok(Ok(validity)) = result {
+            let delay = (validity.remaining() / 3)
+                .min(Duration::from_secs(30))
+                .max(Duration::from_millis(100));
+            current = Some(validity);
+            failures = 0;
+            tracing::info!("verified supporting evidence published");
+            delay
+        } else {
+            if authority.revision != revision {
+                current = None;
             }
-            _ => {
-                if authority.revision != revision {
-                    current = None;
-                }
-                failures = failures.saturating_add(1);
-                // Bounded exponential backoff with jitter; no evidence/key/URL payloads in logs.
-                let mut random = [0u8; 1];
-                getrandom::getrandom(&mut random)?;
-                tracing::warn!(
-                    failures,
-                    "evidence refresh failed; previous snapshot was not overwritten"
-                );
-                Duration::from_millis((1u64 << failures.min(5)) * 1000 + u64::from(random[0]) * 4)
-            }
+            failures = failures.saturating_add(1);
+            // Bounded exponential backoff with jitter; no evidence/key/URL payloads in logs.
+            let mut random = [0u8; 1];
+            getrandom::getrandom(&mut random)?;
+            tracing::warn!(
+                failures,
+                "evidence refresh failed; previous snapshot was not overwritten"
+            );
+            Duration::from_millis((1u64 << failures.min(5)) * 1000 + u64::from(random[0]) * 4)
         };
         let status = json!({"schema":1, "ready": current.as_ref().is_some_and(Validity::is_current),
             "expires_at":current.as_ref().map_or(0, |v| v.expires), "updated_at":super::evidence::now_secs()});
@@ -276,6 +289,10 @@ fn stop(config: &Config) -> anyhow::Result<()> {
 }
 
 /// Container health check. Status is operational only, never attestation authority.
+/// Check that the worker status is recent and its evidence is unexpired.
+///
+/// # Errors
+/// Returns an error for missing, malformed, stale or unready worker status.
 pub fn health() -> anyhow::Result<()> {
     let path = PathBuf::from(required("HIRO_EVIDENCE_STATE_DIR")?).join("status.json");
     let status: Value = serde_json::from_slice(&super::snapshot::read_bounded(&path, 4096)?)?;

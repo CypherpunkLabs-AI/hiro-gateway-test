@@ -106,6 +106,10 @@ pub struct InferenceVerifier {
     cache: Mutex<Option<CachedReport>>,
 }
 impl InferenceVerifier {
+    /// Initialize the inference verifier from explicit identity and KMS policy.
+    ///
+    /// # Errors
+    /// Returns an error for invalid origins, empty or malformed trust settings, or HTTP client initialization.
     pub fn new(config: &crate::config::Config) -> Result<Self> {
         crate::inference::upstream::validate_origin(&config.phala_base_url)?;
         let subjects = config
@@ -163,6 +167,10 @@ impl InferenceVerifier {
         })
     }
 
+    /// Verify the inference endpoint and bind its authority to the request.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid target, rejected evidence, retrieval failure or timeout.
     pub async fn verify(&self, request: VerificationRequest) -> Result<VerifiedUpstream> {
         ensure!(
             request.required
@@ -254,7 +262,7 @@ impl InferenceVerifier {
         let td = match &claims.report {
             Report::TD10(td) => td,
             Report::TD15(td) => &td.base,
-            _ => anyhow::bail!("TDX report required"),
+            Report::SgxEnclave(_) => anyhow::bail!("TDX report required"),
         };
         quote::quote_binds_report_data(evidence, &td.report_data, binding.report_data)?;
         let events = dstack::verify_dstack_event_log(evidence, Some(&td.rt_mr3))
@@ -296,6 +304,10 @@ impl InferenceVerifier {
     }
 }
 
+/// Verify upstream inference evidence before accepting application traffic.
+///
+/// # Errors
+/// Returns an error if the upstream attestation preflight fails.
 pub async fn verify_before_listening(
     verifier: &Arc<InferenceVerifier>,
     origin: &str,

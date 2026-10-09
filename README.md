@@ -194,13 +194,24 @@ build rules. `Cargo.toml` and `Cargo.lock` describe the proxy's other dependenci
 
 Commit both `Cargo.lock` and `MODULE.bazel.lock` after intentional dependency
 updates. Update the Cargo lock explicitly before refreshing the Bazel lock;
-the Bazel build does not rewrite `Cargo.lock`. Docker and CI use the same Bazel release target with module lockfile
-updates disabled. A sibling client checkout is not required.
+the Bazel build does not rewrite `Cargo.lock`. CI and Docker use Bazel with
+module lockfile updates disabled. A sibling client checkout is not required.
+
+The Rust CI job restores Bazel's repository and compiled-action caches and saves
+them even when checks fail. Build, formatting, Clippy and tests run in one Bazel
+invocation with `--keep_going` to report independent failures together. The
+optimized release build runs in the image build, without a duplicate release
+build in the Rust job.
+
+`build/macro_manifest.*` exposes inherited Cargo dependency aliases to dstack's
+derive macros under Bazel. These compile-time manifests are generated from the
+upstream package and workspace manifests; upstream Rust source and dependency
+selections are unchanged.
 
 ## Validation and launch work
 
-The proxy build is checked with Bazel. Local tests and lints are not run.
-Compilation is not runtime security validation. The shared client source is unchanged.
+The proxy build, formatting, Clippy and unit tests are checked with Bazel.
+Compilation is not runtime security validation.
 
 Before launch: complete application wiring, native adapters, genuine-CVM and
 failure-path interoperability, independent review, and release infrastructure.

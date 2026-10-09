@@ -23,6 +23,10 @@ pub struct Config {
 }
 
 impl Config {
+    /// Load and validate database, inference and usage accounting settings.
+    ///
+    /// # Errors
+    /// Returns an error for missing settings, invalid limits, insecure database URLs or malformed credentials.
     pub fn from_env() -> anyhow::Result<Self> {
         let database = required("DATABASE_URL")?;
         let url = reqwest::Url::parse(&database).context("invalid DATABASE_URL")?;
@@ -90,7 +94,7 @@ fn secret(name: &str) -> anyhow::Result<SecretString> {
     ensure!(value.len() >= 32, "{name} must contain at least 32 bytes");
     Ok(value.into())
 }
-fn number<T: std::str::FromStr + ToString>(name: &str, default: T) -> anyhow::Result<T> {
+fn number<T: std::str::FromStr + ToString + Copy>(name: &str, default: T) -> anyhow::Result<T> {
     env::var(name)
         .unwrap_or_else(|_| default.to_string())
         .parse()

@@ -14,6 +14,10 @@ pub struct AuthConfig {
     pub jwks_cache_seconds: u64,
 }
 impl AuthConfig {
+    /// Load and validate bearer authentication settings.
+    ///
+    /// # Errors
+    /// Returns an error for missing or invalid issuer, parties, key-source or cache settings.
     pub fn from_env() -> anyhow::Result<Self> {
         let issuer = optional("AUTH_ISSUER")
             .context("AUTH_ISSUER is required")?

@@ -9,6 +9,7 @@ use axum::{
     extract::FromRequestParts,
     http::{header, request::Parts},
 };
+use jsonwebtoken::jwk::{AlgorithmParameters, KeyAlgorithm, KeyOperations, PublicKeyUse};
 use jsonwebtoken::{
     Algorithm, DecodingKey, Validation, decode, decode_header, errors::ErrorKind, jwk::JwkSet,
 };
@@ -80,6 +81,7 @@ pub struct User {
 }
 
 impl User {
+    #[must_use]
     pub fn id(&self) -> &str {
         &self.user_id
     }
@@ -94,6 +96,10 @@ enum VerifyError {
 }
 
 impl JwtVerifier {
+    /// Create a JWT verifier with a static RSA key or a bounded JWKS client.
+    ///
+    /// # Errors
+    /// Returns an error for invalid configuration, malformed RSA keys or client initialization.
     pub fn new(config: &AuthConfig) -> anyhow::Result<Self> {
         config.validate()?;
         let key_source = if let Some(pem) = &config.jwt_key {
@@ -194,6 +200,10 @@ impl JwtVerifier {
         decode::<Claims>(token, key, &validation).map(|data| data.claims)
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Keep the JWKS refresh transaction and its cache lock in one scope"
+    )]
     async fn jwks_key(&self, kid: &str, force_refresh: bool) -> Result<DecodingKey, VerifyError> {
         if kid.is_empty() || kid.len() > 256 {
             return Err(VerifyError::Invalid);
@@ -274,9 +284,6 @@ impl JwtVerifier {
         for jwk in &jwks.keys {
             let Some(key_id) = jwk.common.key_id.as_ref() else {
                 continue;
-            };
-            use jsonwebtoken::jwk::{
-                AlgorithmParameters, KeyAlgorithm, KeyOperations, PublicKeyUse,
             };
             if key_id.is_empty()
                 || key_id.len() > 256

@@ -23,7 +23,7 @@ impl UsagePlan {
 
 pub async fn enforce_usage_quota(db: &PgPool, user_id: &str) -> Result<UsagePlan, ApiError> {
     let row = sqlx::query(
-        r#"
+        r"
         WITH entitlement AS (
             SELECT EXISTS (
                 SELECT 1
@@ -38,7 +38,7 @@ pub async fn enforce_usage_quota(db: &PgPool, user_id: &str) -> Result<UsagePlan
         LEFT JOIN usage_quota_state AS quota
           ON quota.user_id = $1
          AND quota.sub_tier = CASE WHEN entitlement.is_pro THEN 'pro' ELSE 'free' END
-        "#,
+        ",
     )
     .bind(user_id)
     .fetch_one(db)

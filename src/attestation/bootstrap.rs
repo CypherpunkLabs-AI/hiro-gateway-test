@@ -52,6 +52,14 @@ async fn report(
 /// Start before application dependency initialization; does not require a snapshot.
 /// The parent directory must be owned/provisioned by the deployment and shared only
 /// with the worker. The socket exposes no arbitrary report-data or key derivation.
+/// Start the private evidence listener.
+///
+/// # Errors
+/// Returns an error for unsafe socket paths or permissions, an active socket, or filesystem/bind failures.
+#[expect(
+    clippy::verbose_bit_mask,
+    reason = "POSIX octal mask names the forbidden other-user permissions"
+)]
 pub async fn start(
     path: &Path,
     service: Arc<Service>,

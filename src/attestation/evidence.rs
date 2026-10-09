@@ -1,9 +1,14 @@
 //! Product evidence assembly. Cryptographic encodings come from aci-protocol.
 use crate::{attestation::VerifiedUpstream, attestation::keys::OakKeys};
-use aci_protocol::{digest, identity, receipt::receipt_signing_input, types::*};
+use aci_protocol::{
+    digest, identity,
+    receipt::receipt_signing_input,
+    types::{SourceProvenance, WorkloadKeyset},
+};
 use anyhow::{Result, ensure};
 use serde_json::{Value, json};
 
+#[must_use]
 pub fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -17,6 +22,10 @@ pub struct ServiceConfig {
     pub receipt_ttl_seconds: u64,
 }
 
+/// Require a source repository and commit, or an image digest.
+///
+/// # Errors
+/// Returns an error when neither provenance identity is present.
 pub fn validate_source_provenance(value: &SourceProvenance) -> Result<()> {
     ensure!(
         value.repo_url.as_ref().is_some_and(|s| !s.is_empty())
@@ -33,6 +42,10 @@ pub struct Keyset {
     digest: String,
 }
 impl Keyset {
+    /// Serialize the keyset and calculate its canonical digest.
+    ///
+    /// # Errors
+    /// Returns an error if keyset serialization or canonical hashing fails.
     pub fn new(value: WorkloadKeyset) -> Result<Self> {
         let json = serde_json::to_value(&value)?;
         let digest = identity::workload_keyset_digest(&json)?;
@@ -42,12 +55,15 @@ impl Keyset {
             digest,
         })
     }
+    #[must_use]
     pub fn digest(&self) -> &str {
         &self.digest
     }
+    #[must_use]
     pub fn keyset(&self) -> &WorkloadKeyset {
         &self.value
     }
+    #[must_use]
     pub fn to_value(&self) -> Value {
         self.json.clone()
     }
@@ -92,9 +108,11 @@ impl AttestedSession {
             expires_at,
         })
     }
+    #[must_use]
     pub fn session_id(&self) -> &str {
         &self.id
     }
+    #[must_use]
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
@@ -105,6 +123,7 @@ pub struct SignedReceipt {
     pub document: Vec<u8>,
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct ReceiptRequest<'a> {
     pub id: &'a str,
     pub model: Option<&'a str>,
@@ -150,7 +169,7 @@ impl Receipt {
         });
         Ok(Self { document })
     }
-    pub fn finish(mut self, response_hash: String, keys: &OakKeys) -> Result<SignedReceipt> {
+    pub fn finish(mut self, response_hash: &str, keys: &OakKeys) -> Result<SignedReceipt> {
         self.document["event_log"]
             .as_array_mut()
             .expect("receipt event array")

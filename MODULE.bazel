@@ -37,7 +37,7 @@ crate.annotation(
 # after Bazel's release CFLAGS. Use the upstream-supported builder, unpatched.
 crate.annotation(
     crate = "aws-lc-sys",
-    repositories = ["proxy_crates"],
+    repositories = ["proxy_crates", "dstack_crates"],
     build_script_env = {"AWS_LC_SYS_CMAKE_BUILDER": "1"},
 )
 use_repo(crate, "proxy_crates")
@@ -57,3 +57,28 @@ crate.from_specs(
     supported_platform_triples = ["x86_64-unknown-linux-gnu"],
 )
 use_repo(crate, "dstack_crates")
+
+# Cargo-aware SCALE derives need the upstream workspace's package aliases.
+# Generate compile-time manifests without modifying any upstream source files.
+[
+    crate.annotation(
+        crate = name,
+        repositories = ["dstack_crates"],
+        compile_data = [":macro_manifest"],
+        rustc_env_files = [":macro_manifest_env"],
+        additive_build_file_content = """
+load("@@//build:macro_manifest.bzl", "macro_manifest")
+macro_manifest(
+    name = "macro_manifest",
+    package_manifest = "Cargo.toml",
+    workspace_manifest = ".tmp_git_root/dstack/Cargo.toml",
+)
+filegroup(
+    name = "macro_manifest_env",
+    srcs = [":macro_manifest"],
+    output_group = "environment",
+)
+""",
+    )
+    for name in ["dstack-types", "cc-eventlog", "dstack-attest", "tpm-types", "tpm-attest", "tdx-attest"]
+]

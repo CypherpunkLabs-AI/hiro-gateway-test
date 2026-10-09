@@ -54,7 +54,7 @@ async fn chat(
     {
         return Err(ApiError::Forbidden);
     }
-    let model = state.resolve_model(input.model.as_deref(), admission.plan)?;
+    let model = ChatService::resolve_model(input.model.as_deref(), admission.plan)?;
     let mut messages = vec![json!({"role":"system", "content":state.config.system_prompt})];
     for message in &input.messages {
         messages.push(serde_json::to_value(message).map_err(|_| ApiError::Unavailable)?);
@@ -62,7 +62,7 @@ async fn chat(
     let forwarded = state.request_body(
         user.id(),
         model,
-        messages,
+        &messages,
         state.config.temperature,
         state.config.max_tokens,
     )?;
@@ -136,7 +136,7 @@ async fn title(
         json!({"role":"user", "content":message}),
     ];
     let forwarded =
-        state.request_body(user.id(), crate::inference::GLM_MODEL, messages, 0.2, 64)?;
+        state.request_body(user.id(), crate::inference::GLM_MODEL, &messages, 0.2, 64)?;
     let (response, receipt) = state
         .identity
         .open_inference("/v3/chat/title", None, &received, forwarded)

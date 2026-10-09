@@ -23,11 +23,19 @@ pub struct Metadata {
 }
 
 impl Metadata {
+    /// Read bounded supporting evidence metadata.
+    ///
+    /// # Errors
+    /// Returns an error for file access, invalid JSON or an unsupported schema.
     pub fn read(path: &Path) -> anyhow::Result<Self> {
         let result: Self = serde_json::from_slice(&read_bounded(path, MAX_DOCUMENT)?)?;
         ensure!(result.schema == 1, "unsupported evidence schema");
         Ok(result)
     }
+    /// Combine supporting metadata with a fresh workload report.
+    ///
+    /// # Errors
+    /// Returns an error if serialization fails or the document exceeds the size limit.
     pub fn with_report(&self, report: Value) -> anyhow::Result<Vec<u8>> {
         let mut doc = serde_json::to_value(self)?;
         doc.as_object_mut()
@@ -39,6 +47,10 @@ impl Metadata {
     }
 }
 
+/// Read a regular file without following symlinks or exceeding the byte limit.
+///
+/// # Errors
+/// Returns an error for file access, nonregular files or oversized contents.
 pub fn read_bounded(path: &Path, max: usize) -> anyhow::Result<Vec<u8>> {
     use std::os::unix::fs::OpenOptionsExt;
     // A worker-controlled FIFO/device/symlink must not block a verification task
@@ -59,6 +71,10 @@ pub fn read_bounded(path: &Path, max: usize) -> anyhow::Result<Vec<u8>> {
 }
 
 /// Same-directory rename plus file/directory fsync; never expose a partial snapshot.
+/// Publish bytes durably using a temporary file in the same directory.
+///
+/// # Errors
+/// Returns an error if file creation, writing, syncing or replacement fails.
 pub fn atomic_write(path: &Path, bytes: &[u8], mode: u32) -> anyhow::Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
     let parent = path.parent().context("file has no parent")?;
@@ -92,6 +108,10 @@ pub struct Authority {
 }
 
 impl Authority {
+    /// Lock persistent verification state and initialize the trusted verifier.
+    ///
+    /// # Errors
+    /// Returns an error for invalid trust/checkpoint data, file access or an occupied state lock.
     pub fn open(state: &Path, trust: &Path, roots: &Path) -> anyhow::Result<Self> {
         use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
         std::fs::DirBuilder::new()
@@ -125,7 +145,7 @@ impl Authority {
         };
         let verifier = Verifier::new(
             &read_bounded(trust, 65536)?,
-            &read_bounded(roots, 262144)?,
+            &read_bounded(roots, 262_144)?,
             persisted.as_deref(),
             now,
         )?;
@@ -146,6 +166,10 @@ impl Authority {
     }
 
     /// Adopt authenticated policy floors before attempting recipient verification.
+    /// Authenticate a policy, persist its rollback floor and start a challenge.
+    ///
+    /// # Errors
+    /// Returns an error for policy rejection, checkpoint persistence or challenge generation.
     pub fn begin(&mut self, policy: &Value) -> anyhow::Result<String> {
         let pending = self
             .verifier
@@ -166,6 +190,10 @@ impl Authority {
         Ok(self.verifier.begin(self.clock())?)
     }
 
+    /// Verify evidence and durably commit its release checkpoint before authorization.
+    ///
+    /// # Errors
+    /// Returns an error if evidence, freshness or authorization checks fail, or persistence fails.
     pub fn verify(&mut self, bytes: &[u8]) -> anyhow::Result<Validity> {
         let pending = self.verifier.verify(bytes, self.clock())?;
         let checkpoint = pending.checkpoint_json().as_bytes().to_vec();
@@ -197,10 +225,12 @@ pub struct Validity {
     deadline: Instant,
 }
 impl Validity {
+    #[must_use]
     pub fn is_current(&self) -> bool {
         let now = super::evidence::now_secs();
         Instant::now() < self.deadline && now >= self.verified_at && now < self.expires
     }
+    #[must_use]
     pub fn remaining(&self) -> Duration {
         self.deadline.saturating_duration_since(Instant::now())
     }
@@ -245,7 +275,7 @@ mod tests {
         let mut valid = Validity {
             verified_at: now,
             expires: now + 60,
-            deadline: Instant::now() + Duration::from_secs(60),
+            deadline: Instant::now() + Duration::from_mins(1),
         };
         assert!(valid.is_current());
         valid.verified_at = now + 60;

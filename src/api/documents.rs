@@ -75,7 +75,7 @@ async fn vision(State(state): State<VisionGateway>, request: Request) -> Respons
     let Ok(_permit) = state.slots.try_acquire() else {
         return public_error(StatusCode::TOO_MANY_REQUESTS, "Vision processing is busy.");
     };
-    match tokio::time::timeout(Duration::from_secs(120), async {
+    match tokio::time::timeout(Duration::from_mins(2), async {
         let body = to_bytes(request.into_body(), 32 * 1024 * 1024).await?;
         let input: VisionInput = serde_json::from_slice(&body)?;
         vision_inner(&state, input).await

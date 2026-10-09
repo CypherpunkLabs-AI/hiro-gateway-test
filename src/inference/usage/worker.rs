@@ -112,13 +112,11 @@ impl UsageWorker {
         // Keep this bounded batch until accepted. Backpressure eventually closes
         // admission rather than silently discarding successful inference usage.
         loop {
-            match self.publish_batch(&batch).await {
-                Ok(()) => break,
-                Err(_) => {
-                    tracing::error!(event_count, "usage delivery unavailable; retaining batch");
-                    sleep(Duration::from_secs(5)).await;
-                }
+            if self.publish_batch(&batch).await.is_ok() {
+                break;
             }
+            tracing::error!(event_count, "usage delivery unavailable; retaining batch");
+            sleep(Duration::from_secs(5)).await;
         }
     }
 

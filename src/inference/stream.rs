@@ -1,4 +1,4 @@
-//! OpenAI SSE decoding over the already attested, pinned Phala connection.
+//! `OpenAI` SSE decoding over the already attested, pinned Phala connection.
 use super::upstream::StreamResponse;
 use anyhow::{Context, ensure};
 use eventsource_stream::Eventsource;

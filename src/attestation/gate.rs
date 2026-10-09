@@ -9,6 +9,10 @@ use tokio::{sync::RwLock, task::JoinHandle};
 #[derive(Clone, Default)]
 pub struct Gate(Arc<RwLock<Option<(Metadata, Validity)>>>);
 impl Gate {
+    /// Read independently verified evidence that is still current.
+    ///
+    /// # Errors
+    /// Returns an error when evidence is absent or expired.
     pub async fn metadata(&self) -> anyhow::Result<Metadata> {
         let current = self.0.read().await;
         let (metadata, validity) = current.as_ref().context("evidence not ready")?;
@@ -60,7 +64,7 @@ impl Gate {
                         && bytes != &last_policy
                     {
                         nonce = Some(authority.begin(&serde_json::from_slice::<Value>(bytes)?)?);
-                        last_policy = bytes.clone();
+                        last_policy.clone_from(bytes);
                         if authority.revision != revision {
                             *state.0.write().await = None;
                         }

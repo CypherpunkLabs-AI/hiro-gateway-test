@@ -209,7 +209,7 @@ impl Service {
                 hash.update(&chunk);
                 yield chunk;
             }
-            let signed = pending.receipt.finish(format!("sha256:{}", hex::encode(hash.finalize())), self.keys.as_ref())
+            let signed = pending.receipt.finish(&format!("sha256:{}", hex::encode(hash.finalize())), self.keys.as_ref())
                 .map_err(|_| std::io::Error::other("receipt signing failed"))?;
             self.completions.store_completion(signed, pending.session)?;
         };

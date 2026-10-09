@@ -124,8 +124,8 @@ async fn send(
     reason = "explicit timeout outcome branches"
 )]
 async fn serve(mut socket: WebSocket, state: Gateway) -> anyhow::Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(900);
-    let (mut channel, ()) = timeout(Duration::from_secs(60), async {
+    let deadline = Instant::now() + Duration::from_mins(15);
+    let (mut channel, ()) = timeout(Duration::from_mins(1), async {
         let nonce = crate::transport::parse_initialize(&binary(&mut socket).await?)?;
         let _quote = state.quotes.clone().try_acquire_owned()?;
         let report = state.service.attestation_report(Some(nonce)).await?;
@@ -156,7 +156,7 @@ async fn serve(mut socket: WebSocket, state: Gateway) -> anyhow::Result<()> {
     let mut flow = Flow::default();
     for _ in 0..crate::transport::MAX_REQUESTS {
         let bytes = timeout_at(
-            deadline.min(Instant::now() + Duration::from_secs(60)),
+            deadline.min(Instant::now() + Duration::from_mins(1)),
             binary(&mut socket),
         )
         .await??;
@@ -166,7 +166,7 @@ async fn serve(mut socket: WebSocket, state: Gateway) -> anyhow::Result<()> {
         let Some(Kind::RequestStart(start)) = record.kind else {
             anyhow::bail!("request start required")
         };
-        let request_deadline = deadline.min(Instant::now() + Duration::from_secs(660));
+        let request_deadline = deadline.min(Instant::now() + Duration::from_mins(11));
         let result = timeout_at(
             request_deadline,
             operation(&mut socket, &mut channel, &mut flow, &id, start, &state),

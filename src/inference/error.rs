@@ -48,7 +48,7 @@ impl IntoResponse for ApiError {
                 StatusCode::TOO_MANY_REQUESTS,
                 "rate_limited",
                 "Usage limit reached",
-                Some((*retry_after_seconds).max(1) as u64),
+                Some((*retry_after_seconds).max(1).cast_unsigned()),
             ),
             Self::RequestRateLimited {
                 retry_after_seconds,
