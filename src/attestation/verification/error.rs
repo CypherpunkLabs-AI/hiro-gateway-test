@@ -48,7 +48,7 @@ pub enum Error {
     /// Recipient key, role, service, or nonce does not match the quote.
     #[error("attested recipient binding rejected")]
     Binding,
-    /// KMS bootstrap evidence or key derivation chain was rejected.
+    /// KMS certificate evidence or key derivation chain was rejected.
     #[error("key custody verification failed")]
     Custody,
     /// Persistent metadata has not been acknowledged or the handle is stale.

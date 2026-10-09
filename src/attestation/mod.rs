@@ -4,6 +4,7 @@ pub mod evidence;
 pub mod gate;
 pub mod keys;
 mod kms;
+pub mod provisioning;
 pub mod snapshot;
 mod upstream;
 pub mod worker;

@@ -19,3 +19,5 @@ use error::{Error, Result};
 use model::RecipientProfile;
 use policy::Checkpoint;
 pub(crate) use session::{Clock, Verifier};
+
+pub(crate) use quote::profile_from_quote;

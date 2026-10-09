@@ -31,7 +31,7 @@ pub(crate) fn verify(
 }
 
 /// Authenticate a measured identity against independently approved policy.
-/// KMS bootstrap evidence carries this hash but not its composition preimage.
+/// KMS certificate evidence carries this hash but not its composition preimage.
 pub(crate) fn verify_identity(
     evidence: &Value,
     rtmr3: &[u8; 48],

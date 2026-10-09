@@ -441,6 +441,7 @@ fn validate_snapshot(
         super::quote::validate_profile(profile)?;
     }
     for kms in &snapshot.kms {
+        crate::attestation::kms::endpoint(&kms.endpoint).map_err(|_| Error::Policy)?;
         let root = encoding::hex_array::<33>(&kms.root_public_key)?;
         evidence_k256::ecdsa::VerifyingKey::from_sec1_bytes(&root).map_err(|_| Error::Policy)?;
         encoding::hex_array::<32>(&kms.ca_public_key_sha256)?;

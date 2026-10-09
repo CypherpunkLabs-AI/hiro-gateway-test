@@ -145,6 +145,58 @@ pub(crate) fn verify(
     Ok(VerifiedQuote { report, expires_at })
 }
 
+/// Create a candidate only after independent dstack OS verification. The caller
+/// supplies explicit platform feature allowances; strict TCB appraisal remains mandatory.
+pub(crate) fn profile_from_quote(
+    raw: &[u8],
+    collateral: &QuoteCollateralV3,
+    id: String,
+    now: u64,
+    allow_smt: bool,
+    allow_dynamic_platform: bool,
+    allow_cached_keys: bool,
+) -> Result<PlatformProfile> {
+    preflight(raw)?;
+    let policy = QuotePolicy::strict(now)
+        .allow_smt(allow_smt)
+        .allow_dynamic_platform(allow_dynamic_platform)
+        .allow_cached_keys(allow_cached_keys);
+    let claims = QuoteVerifier::new_prod()
+        .with_config::<RustCryptoConfig>()
+        .verify_with_policy(raw, collateral, now, &policy)
+        .map_err(|_| Error::Quote)?;
+    let Report::TD10(r) = claims.report else {
+        return Err(Error::Platform);
+    };
+    let profile = PlatformProfile {
+        id,
+        mr_td: hex::encode(r.mr_td),
+        rt_mr0: hex::encode(r.rt_mr0),
+        rt_mr1: hex::encode(r.rt_mr1),
+        rt_mr2: hex::encode(r.rt_mr2),
+        mr_seam: hex::encode(r.mr_seam),
+        mr_signer_seam: hex::encode(r.mr_signer_seam),
+        mr_config_id: hex::encode(r.mr_config_id),
+        mr_owner: hex::encode(r.mr_owner),
+        mr_owner_config: hex::encode(r.mr_owner_config),
+        td_attributes: hex::encode(r.td_attributes),
+        seam_attributes: hex::encode(r.seam_attributes),
+        xfam: hex::encode(r.xfam),
+        minimum_tee_tcb_svn: hex::encode(r.tee_tcb_svn),
+        minimum_tcb_evaluation: claims
+            .tcb
+            .eval_data_number
+            .min(claims.qe.tcb_eval_data_number),
+        allowed_advisories: claims.tcb.advisory_ids,
+        allow_smt,
+        allow_dynamic_platform,
+        allow_cached_keys,
+        accepted_ppid_sha256: vec![encoding::digest(&claims.platform.pck.ppid)],
+    };
+    verify(raw, collateral, &profile, now)?;
+    Ok(profile)
+}
+
 pub(crate) fn decode_quote(value: &str) -> Result<Vec<u8>> {
     if value.len() > 128 * 1024 || !value.len().is_multiple_of(2) {
         return Err(Error::Limit);
@@ -170,7 +222,12 @@ fn preflight(raw: &[u8]) -> Result<()> {
     cursor.take(584)?;
     let auth_len = cursor.u32()?;
     let mut auth = Cursor(cursor.take(auth_len)?);
-    cursor.end()?;
+    // Some dstack providers return a zero-filled buffer tail after the quote's
+    // declared length. It is outside the signed body. Reject nonzero suffixes
+    // and keep every nested authentication/certificate boundary exact.
+    if cursor.0.len() > 1024 || cursor.0.iter().any(|byte| *byte != 0) {
+        return Err(Error::Quote);
+    }
     auth.take(128)?; // Quote signature and attestation public key.
     if auth.u16()? != 6 {
         return Err(Error::Quote);
@@ -219,5 +276,24 @@ impl<'a> Cursor<'a> {
         } else {
             Err(Error::Quote)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_provider_zero_padding_but_rejects_hidden_suffixes() {
+        let decoded =
+            crate::attestation::kms::decode_certificate(include_bytes!("../testdata/kms-cert.der"))
+                .unwrap();
+        assert!(preflight(&decoded.quote).is_ok());
+        let mut nonzero = decoded.quote.clone();
+        nonzero.push(1);
+        assert!(preflight(&nonzero).is_err());
+        let mut excessive = decoded.quote;
+        excessive.extend_from_slice(&[0; 1025]);
+        assert!(preflight(&excessive).is_err());
     }
 }

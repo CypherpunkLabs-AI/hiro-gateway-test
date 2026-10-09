@@ -84,7 +84,7 @@ impl RecipientProfile {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PlatformProfile {
     pub id: String,
@@ -114,6 +114,7 @@ pub(crate) struct PlatformProfile {
 #[serde(deny_unknown_fields)]
 pub(crate) struct KmsApproval {
     pub id: String,
+    pub endpoint: String,
     pub root_public_key: String,
     pub ca_public_key_sha256: String,
     pub app_id: String,
@@ -124,9 +125,9 @@ pub(crate) struct KmsApproval {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct KmsEvidence {
-    pub quote: String,
-    pub event_log: String,
+    pub kind: String,
+    pub certificate: String,
+    pub ca_certificate: String,
     pub collateral: QuoteCollateralV3,
-    pub ca_public_key: String,
     pub root_public_key: String,
 }

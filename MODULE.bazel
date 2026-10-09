@@ -51,6 +51,24 @@ crate.spec(
     rev = "3c877847e71a205a1d036965b8f5d671b3740103",
     default_features = False,
 )
+[
+    crate.spec(
+        package = package,
+        repositories = ["dstack_crates"],
+        git = "https://github.com/Dstack-TEE/dstack.git",
+        rev = "3c877847e71a205a1d036965b8f5d671b3740103",
+        default_features = False,
+    )
+    for package in ["ra-tls", "dstack-verifier"]
+]
+# This graph has a separate Tokio crate identity. Run its network verifier on
+# its own runtime rather than polling it under the application's Tokio reactor.
+crate.spec(
+    package = "tokio",
+    repositories = ["dstack_crates"],
+    version = "=1.53.2",
+    features = ["full"],
+)
 crate.from_specs(
     name = "dstack_crates",
     generate_build_scripts = True,
@@ -80,5 +98,5 @@ filegroup(
 )
 """,
     )
-    for name in ["dstack-types", "cc-eventlog", "dstack-attest", "tpm-types", "tpm-attest", "tdx-attest"]
+    for name in ["dstack-types", "cc-eventlog", "dstack-attest", "dstack-mr", "ra-tls", "tpm-types", "tpm-attest", "tdx-attest"]
 ]

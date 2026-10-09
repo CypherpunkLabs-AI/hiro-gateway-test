@@ -1,4 +1,4 @@
-//! dstack KMS bootstrap provenance and selected-key derivation chains.
+//! dstack KMS RA-TLS identity and selected-key derivation chains.
 
 use aci_protocol::types::WorkloadKeyset;
 use evidence_k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
@@ -11,44 +11,40 @@ use super::{
     quote,
 };
 
-pub(crate) fn verify_bootstrap(
+pub(crate) fn verify_kms(
     evidence: &KmsEvidence,
     approval: &KmsApproval,
     platform: &PlatformProfile,
     now: u64,
 ) -> Result<u64> {
-    if evidence.root_public_key != approval.root_public_key || evidence.ca_public_key.len() > 2048 {
+    use crate::attestation::kms;
+    if evidence.kind != "dstack-ratls-v1"
+        || evidence.root_public_key != approval.root_public_key
+        || evidence.ca_certificate.len() > 32 * 1024
+        || evidence.certificate.len() > kms::MAX_CERTIFICATE * 2
+    {
         return Err(Error::Custody);
     }
-    let root = encoding::hex_array::<33>(&evidence.root_public_key)?;
-    VerifyingKey::from_sec1_bytes(&root).map_err(|_| Error::Custody)?;
-    let ca = hex::decode(&evidence.ca_public_key).map_err(|_| Error::Custody)?;
-    if encoding::digest(&ca) != approval.ca_public_key_sha256 {
+    let ca = hex::decode(&evidence.ca_certificate).map_err(|_| Error::Encoding)?;
+    let leaf = hex::decode(&evidence.certificate).map_err(|_| Error::Encoding)?;
+    let ca_key = kms::ca_key(&ca).map_err(|_| Error::Custody)?;
+    if encoding::digest(&ca_key) != approval.ca_public_key_sha256 {
         return Err(Error::Custody);
     }
-    let raw_quote = quote::decode_quote(&evidence.quote)?;
-    let verified = quote::verify(&raw_quote, &evidence.collateral, platform, now)?;
-    // Exact dstack KMS bootstrap encoding, including upstream's "genereted" spelling.
-    // Source: dstack/kms/src/onboard_service.rs::attest_keys.
-    let message = format!(
-        "dstack-kms-genereted-keys-v1:{};{};",
-        hex::encode(ca),
-        hex::encode(root)
-    );
-    let hash = Keccak256::digest(message.as_bytes());
-    let mut report_data = [0; 64];
-    report_data[..32].copy_from_slice(&hash);
-    if verified.report.report_data != report_data {
+    let certificate_expiry =
+        kms::verify_certificate(&ca, &leaf, &approval.endpoint, now).map_err(|_| Error::Custody)?;
+    let decoded = kms::decode_certificate(&leaf).map_err(|_| Error::Custody)?;
+    let verified = quote::verify(&decoded.quote, &evidence.collateral, platform, now)?;
+    if verified.report.report_data != decoded.report_data {
         return Err(Error::Custody);
     }
-    let measured = serde_json::json!({"event_log": evidence.event_log});
     measurement::verify_identity(
-        &measured,
+        &serde_json::json!({"event_log": decoded.event_log}),
         &verified.report.rt_mr3,
         &approval.app_id,
         &approval.compose_sha256,
     )?;
-    Ok(verified.expires_at)
+    Ok(verified.expires_at.min(certificate_expiry))
 }
 
 pub(crate) fn verify_keys(
@@ -183,4 +179,60 @@ fn recover(message: &[u8], encoded: &str) -> Result<VerifyingKey> {
     let signature = Signature::from_slice(&signature[..64]).map_err(|_| Error::Custody)?;
     VerifyingKey::recover_from_digest(Keccak256::new_with_prefix(message), &signature, recovery)
         .map_err(|_| Error::Custody)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::attestation::kms;
+
+    #[test]
+    fn authenticates_live_rtls_quote_and_rejects_key_or_identity_substitution() {
+        let ca = include_bytes!("../testdata/kms-ca.der");
+        let leaf = include_bytes!("../testdata/kms-cert.der");
+        let collateral =
+            serde_json::from_slice(include_bytes!("../testdata/kms-collateral.json")).unwrap();
+        let decoded = kms::decode_certificate(leaf).unwrap();
+        let now = 1_791_540_000;
+        let profile = quote::profile_from_quote(
+            &decoded.quote,
+            &collateral,
+            "kms-test".into(),
+            now,
+            true,
+            true,
+            true,
+        )
+        .unwrap();
+        let events: Vec<Value> = serde_json::from_str(&decoded.event_log).unwrap();
+        let event = |name: &str| {
+            events.iter().find(|e| e["event"] == name).unwrap()["event_payload"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let mut approval = KmsApproval {
+            id: "kms".into(),
+            endpoint: "https://kms.dstack-pha-prod10.phala.network".into(),
+            root_public_key: "0334c76e0c3f52ec64cbf9bbf5c910c272330166fd656c0a86bb330963e46910e1"
+                .into(),
+            ca_public_key_sha256: encoding::digest(&kms::ca_key(ca).unwrap()),
+            app_id: event("app-id"),
+            compose_sha256: event("compose-hash"),
+            platform_id: "kms-test".into(),
+        };
+        let evidence = KmsEvidence {
+            kind: "dstack-ratls-v1".into(),
+            certificate: hex::encode(leaf),
+            ca_certificate: hex::encode(ca),
+            collateral,
+            root_public_key: approval.root_public_key.clone(),
+        };
+        assert!(verify_kms(&evidence, &approval, &profile, now).is_ok());
+        approval.ca_public_key_sha256 = "00".repeat(32);
+        assert!(verify_kms(&evidence, &approval, &profile, now).is_err());
+        approval.ca_public_key_sha256 = encoding::digest(&kms::ca_key(ca).unwrap());
+        approval.compose_sha256 = "00".repeat(32);
+        assert!(verify_kms(&evidence, &approval, &profile, now).is_err());
+    }
 }

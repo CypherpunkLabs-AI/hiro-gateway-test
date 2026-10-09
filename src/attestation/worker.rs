@@ -19,6 +19,7 @@ pub struct Config {
     pub release_base: Url,
     pub policy: Url,
     pub kms: Url,
+    pub kms_ca: PathBuf,
     pub pccs: String,
 }
 
@@ -53,9 +54,7 @@ impl Config {
             release_base.path().ends_with('/') && release_base.query().is_none(),
             "release base URL must end with / and have no query"
         );
-        let kms = https(&required("HIRO_KMS_URL")?)?;
-        ensure!(kms.query().is_none(), "KMS base URL must have no query");
-        let kms = kms.join("/prpc/KMS.GetMeta?json")?;
+        let kms = super::kms::endpoint(&required("HIRO_KMS_URL")?)?;
         Ok(Self {
             socket: required("HIRO_EVIDENCE_SOCKET")?.into(),
             output: required("HIRO_OAK_EVIDENCE_PATH")?.into(),
@@ -65,12 +64,13 @@ impl Config {
             release_base,
             policy: https(&required("HIRO_POLICY_URL")?)?,
             kms,
+            kms_ca: required("HIRO_KMS_CA_PATH")?.into(),
             pccs: https(&required("HIRO_PCCS_URL")?)?.to_string(),
         })
     }
 }
 
-async fn bytes(response: reqwest::Response, max: usize) -> anyhow::Result<Vec<u8>> {
+pub(crate) async fn bytes(response: reqwest::Response, max: usize) -> anyhow::Result<Vec<u8>> {
     let mut response = response
         .error_for_status()
         .context("evidence source returned an error")?;
@@ -98,7 +98,7 @@ async fn fetch(client: &Client, url: Url) -> anyhow::Result<Value> {
 
 /// Adapt the existing HTTP library to QVL's transport trait, with the same
 /// response-size, HTTPS, no-redirect and timeout limits as artifact retrieval.
-struct CollateralHttp(Client);
+pub(crate) struct CollateralHttp(pub Client);
 impl dcap_qvl::http::HttpClient for CollateralHttp {
     async fn get(&self, url: &str) -> anyhow::Result<dcap_qvl::http::HttpResponse> {
         let response = self.0.get(https(url)?).send().await?;
@@ -166,6 +166,8 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(30))
         .build()?;
+    let kms_ca = super::kms::ca_der(&super::snapshot::read_bounded(&config.kms_ca, 16 * 1024)?)?;
+    let kms_client = super::kms::client(&kms_ca)?;
     let local = Client::builder()
         .unix_socket(config.socket.clone())
         .no_proxy()
@@ -193,13 +195,17 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
             ensure!(compose.len() <= 256 * 1024, "composition exceeds limit");
             let digest = hex::encode(Sha256::digest(compose.as_bytes()));
             let release_url = config.release_base.join(&format!("{digest}.json"))?;
-            let (release, kms_meta) = tokio::try_join!(
+            let (release, mut kms) = tokio::try_join!(
                 fetch(&network, release_url),
-                fetch(&network, config.kms.clone())
+                super::kms::collect(&kms_client, &config.kms, &kms_ca)
             )?;
-            let mut kms = super::kms::decode_meta(&kms_meta)?;
             let local_quote = quote(&report["attestation"]["evidence"]["quote"])?;
-            let kms_quote = quote(&kms["quote"])?;
+            let kms_quote = super::kms::decode_certificate(&hex::decode(
+                kms["certificate"]
+                    .as_str()
+                    .context("KMS certificate missing")?,
+            )?)?
+            .quote;
             let collateral_client = dcap_qvl::collateral::CollateralClient::<
                 dcap_qvl::configs::RustCryptoConfig,
                 _,

@@ -468,8 +468,7 @@ impl Verifier {
             .iter()
             .find(|p| p.id == kms.platform_id)
             .ok_or(Error::Platform)?;
-        let kms_expiry =
-            custody::verify_bootstrap(&evidence.kms, kms, kms_platform, now.unix_seconds)?;
+        let kms_expiry = custody::verify_kms(&evidence.kms, kms, kms_platform, now.unix_seconds)?;
         custody::verify_keys(
             app_evidence,
             &binding.keyset,

@@ -37,7 +37,25 @@ async fn main() -> anyhow::Result<()> {
         [command] if command == "evidence-health" => {
             return hiro_proxy::attestation::worker::health();
         }
-        _ => anyhow::bail!("usage: hiro-proxy [serve|evidence|evidence-health]"),
+        [command, input, expected, output] if command == "prepare-platform" => {
+            return hiro_proxy::attestation::provisioning::prepare(
+                input.as_ref(),
+                expected.as_ref(),
+                output.as_ref(),
+            )
+            .await;
+        }
+        [command, origin, ca, output] if command == "collect-kms" => {
+            return hiro_proxy::attestation::provisioning::collect_kms(
+                origin,
+                ca.as_ref(),
+                output.as_ref(),
+            )
+            .await;
+        }
+        _ => anyhow::bail!(
+            "usage: hiro-proxy [serve|evidence|evidence-health|prepare-platform INPUT EXPECTED OUTPUT|collect-kms ORIGIN CA OUTPUT]"
+        ),
     }
     let config = Config::from_env().context("invalid configuration")?;
     let jwt_verifier = hiro_proxy::auth::JwtVerifier::new(&config.auth)
