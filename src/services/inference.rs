@@ -159,12 +159,14 @@ impl Service {
         )?;
         let id = uuid::Uuid::new_v4().to_string();
         let receipt = Receipt::new(
-            &id,
-            requested_model,
-            self.keyset.digest(),
-            path,
-            received,
-            &prepared.request.body,
+            crate::attestation::evidence::ReceiptRequest {
+                id: &id,
+                model: requested_model,
+                keyset: self.keyset.digest(),
+                path,
+                received,
+                forwarded: &prepared.request.body,
+            },
             &event,
             &session,
         )?;

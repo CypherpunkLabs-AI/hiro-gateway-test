@@ -56,14 +56,13 @@ impl Gate {
                     .await??;
                     // A fresh signed revocation must be adopted even when snapshot reading fails.
                     let mut nonce = None;
-                    if let Some(bytes) = &policy_bytes {
-                        if bytes != &last_policy {
-                            nonce =
-                                Some(authority.begin(&serde_json::from_slice::<Value>(bytes)?)?);
-                            last_policy = bytes.clone();
-                            if authority.revision != revision {
-                                *state.0.write().await = None;
-                            }
+                    if let Some(bytes) = &policy_bytes
+                        && bytes != &last_policy
+                    {
+                        nonce = Some(authority.begin(&serde_json::from_slice::<Value>(bytes)?)?);
+                        last_policy = bytes.clone();
+                        if authority.revision != revision {
+                            *state.0.write().await = None;
                         }
                     }
                     let bytes = metadata_bytes?;

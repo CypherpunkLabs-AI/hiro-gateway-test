@@ -105,6 +105,15 @@ pub struct SignedReceipt {
     pub document: Vec<u8>,
 }
 
+pub(crate) struct ReceiptRequest<'a> {
+    pub id: &'a str,
+    pub model: Option<&'a str>,
+    pub keyset: &'a str,
+    pub path: &'a str,
+    pub received: &'a [u8],
+    pub forwarded: &'a [u8],
+}
+
 /// A receipt can only be constructed from an authorized forwarding decision.
 /// Completion consumes it once after the response body has been fully hashed.
 pub(crate) struct Receipt {
@@ -112,15 +121,18 @@ pub(crate) struct Receipt {
 }
 impl Receipt {
     pub fn new(
-        id: &str,
-        model: Option<&str>,
-        keyset: &str,
-        path: &str,
-        received: &[u8],
-        forwarded: &[u8],
+        request: ReceiptRequest<'_>,
         event: &VerifiedUpstream,
         session: &AttestedSession,
     ) -> Result<Self> {
+        let ReceiptRequest {
+            id,
+            model,
+            keyset,
+            path,
+            received,
+            forwarded,
+        } = request;
         ensure!(
             event.is_current() && event.required,
             "upstream authority expired"
