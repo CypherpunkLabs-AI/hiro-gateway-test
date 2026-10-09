@@ -126,7 +126,6 @@ pub(crate) struct KmsApproval {
 pub(crate) struct KmsEvidence {
     pub quote: String,
     pub event_log: String,
-    pub app_compose: String,
     pub collateral: QuoteCollateralV3,
     pub ca_public_key: String,
     pub root_public_key: String,

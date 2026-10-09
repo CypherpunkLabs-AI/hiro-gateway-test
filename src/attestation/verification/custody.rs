@@ -41,9 +41,8 @@ pub(crate) fn verify_bootstrap(
     if verified.report.report_data != report_data {
         return Err(Error::Custody);
     }
-    let measured =
-        serde_json::json!({"event_log": evidence.event_log, "app_compose": evidence.app_compose});
-    measurement::verify(
+    let measured = serde_json::json!({"event_log": evidence.event_log});
+    measurement::verify_identity(
         &measured,
         &verified.report.rt_mr3,
         &approval.app_id,

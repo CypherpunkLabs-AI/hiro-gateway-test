@@ -41,3 +41,19 @@ crate.annotation(
     build_script_env = {"AWS_LC_SYS_CMAKE_BUILDER": "1"},
 )
 use_repo(crate, "proxy_crates")
+
+# Keep upstream's decoder unmodified. Its QVL dependency has a different
+# exact webpki pin from the application verifier and must resolve independently.
+crate.spec(
+    package = "dstack-attest",
+    repositories = ["dstack_crates"],
+    git = "https://github.com/Dstack-TEE/dstack.git",
+    rev = "3c877847e71a205a1d036965b8f5d671b3740103",
+    default_features = False,
+)
+crate.from_specs(
+    name = "dstack_crates",
+    generate_build_scripts = True,
+    supported_platform_triples = ["x86_64-unknown-linux-gnu"],
+)
+use_repo(crate, "dstack_crates")

@@ -13,6 +13,7 @@ rust_library(
     deps = all_crate_deps(normal = True) + [
         "@oak//oak_session:oak_session",
         "@oak//oak_proto_rust:oak_proto_rust",
+        "@dstack_crates//:dstack-attest",
     ],
     proc_macro_deps = all_crate_deps(proc_macro = True),
     rustc_flags = ["-Funsafe-code", "-Dunused-must-use", "-Wclippy::all", "-Wclippy::pedantic"],

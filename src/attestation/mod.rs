@@ -3,6 +3,7 @@ pub mod bootstrap;
 pub mod evidence;
 pub mod gate;
 pub mod keys;
+mod kms;
 pub mod snapshot;
 mod upstream;
 pub mod worker;

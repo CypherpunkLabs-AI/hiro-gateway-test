@@ -3,7 +3,8 @@
 use std::collections::BTreeMap;
 
 use aci_verify::dstack::{
-    DstackEventLog, dstack_app_id, verify_dstack_compose_measurement, verify_dstack_event_log,
+    DstackEventLog, VerifiedEventLog, dstack_app_id, dstack_rtmr3_event,
+    verify_dstack_compose_measurement, verify_dstack_event_log,
 };
 use evidence_sha2::{Digest, Sha384};
 use serde::Deserialize;
@@ -19,6 +20,24 @@ pub(crate) fn verify(
     app_id: &str,
     compose_hash: &str,
 ) -> Result<()> {
+    let verified = verify_identity(evidence, rtmr3, app_id, compose_hash)?;
+    // Workloads additionally supply the exact preimage for container inspection.
+    if verify_dstack_compose_measurement(evidence, &verified).map_err(|_| Error::Measurement)?
+        != compose_hash
+    {
+        return Err(Error::Measurement);
+    }
+    Ok(())
+}
+
+/// Authenticate a measured identity against independently approved policy.
+/// KMS bootstrap evidence carries this hash but not its composition preimage.
+pub(crate) fn verify_identity(
+    evidence: &Value,
+    rtmr3: &[u8; 48],
+    app_id: &str,
+    compose_hash: &str,
+) -> Result<VerifiedEventLog> {
     let log = evidence
         .get("event_log")
         .and_then(Value::as_str)
@@ -62,13 +81,18 @@ pub(crate) fn verify(
     }
     let verified =
         verify_dstack_event_log(evidence, Some(rtmr3)).map_err(|_| Error::Measurement)?;
-    if hex::encode(dstack_app_id(&verified).map_err(|_| Error::Measurement)?) != app_id
-        || verify_dstack_compose_measurement(evidence, &verified).map_err(|_| Error::Measurement)?
-            != compose_hash
+    if hex::encode(dstack_app_id(&verified).map_err(|_| Error::Measurement)?) != app_id {
+        return Err(Error::Measurement);
+    }
+    let measured = dstack_rtmr3_event(&entries, "compose-hash")
+        .map_err(|_| Error::Measurement)?
+        .ok_or(Error::Measurement)?;
+    if encoding::hex_array::<32>(&measured.event_payload)?
+        != encoding::hex_array::<32>(compose_hash)?
     {
         return Err(Error::Measurement);
     }
-    Ok(())
+    Ok(verified)
 }
 
 #[derive(Deserialize)]

@@ -49,6 +49,9 @@ impl Config {
             release_base.path().ends_with('/') && release_base.query().is_none(),
             "release base URL must end with / and have no query"
         );
+        let kms = https(&required("HIRO_KMS_URL")?)?;
+        ensure!(kms.query().is_none(), "KMS base URL must have no query");
+        let kms = kms.join("/prpc/KMS.GetMeta?json")?;
         Ok(Self {
             socket: required("HIRO_EVIDENCE_SOCKET")?.into(),
             output: required("HIRO_OAK_EVIDENCE_PATH")?.into(),
@@ -57,7 +60,7 @@ impl Config {
             roots: required("HIRO_SIGSTORE_ROOTS_PATH")?.into(),
             release_base,
             policy: https(&required("HIRO_POLICY_URL")?)?,
-            kms: https(&required("HIRO_KMS_EVIDENCE_URL")?)?,
+            kms,
             pccs: https(&required("HIRO_PCCS_URL")?)?.to_string(),
         })
     }
@@ -174,10 +177,11 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
             ensure!(compose.len() <= 256 * 1024, "composition exceeds limit");
             let digest = hex::encode(Sha256::digest(compose.as_bytes()));
             let release_url = config.release_base.join(&format!("{digest}.json"))?;
-            let (release, mut kms) = tokio::try_join!(
+            let (release, kms_meta) = tokio::try_join!(
                 fetch(&network, release_url),
                 fetch(&network, config.kms.clone())
             )?;
+            let mut kms = super::kms::decode_meta(kms_meta)?;
             let local_quote = quote(&report["attestation"]["evidence"]["quote"])?;
             let kms_quote = quote(&kms["quote"])?;
             let collateral_client = dcap_qvl::collateral::CollateralClient::<
