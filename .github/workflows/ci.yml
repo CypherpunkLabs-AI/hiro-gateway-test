@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+    tags: ['v*']
 
 permissions:
   contents: read
@@ -56,7 +57,7 @@ jobs:
   container-check:
     if: github.event_name == 'pull_request'
     needs: rust
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
@@ -70,11 +71,12 @@ jobs:
           cache-from: type=gha,scope=hiro-proxy
 
   publish:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 45
+    if: github.event_name == 'push'
     needs: rust
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
-      contents: read
+      contents: write
       packages: write
       id-token: write
       attestations: write
@@ -86,9 +88,21 @@ jobs:
       - name: Image identity
         id: image
         shell: bash
-        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+        run: |
+          name="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          {
+            echo 'tags<<IMAGES'
+            echo "$name:sha-$GITHUB_SHA"
+            echo "$name:build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+              [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]] || exit 1
+              echo "$name:$GITHUB_REF_NAME"
+            fi
+            echo 'IMAGES'
+          } >> "$GITHUB_OUTPUT"
       - name: Log in to GHCR
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
@@ -98,11 +112,9 @@ jobs:
         id: build
         with:
           context: .
-          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          push: true
           platforms: linux/amd64
-          tags: |
-            ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
-            ${{ steps.image.outputs.name }}:build-${{ github.run_id }}-${{ github.run_attempt }}
+          tags: ${{ steps.image.outputs.tags }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -112,7 +124,7 @@ jobs:
           cache-from: type=gha,scope=hiro-proxy
           cache-to: type=gha,mode=max,scope=hiro-proxy
       - name: Sign and publish image provenance
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push'
         id: provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -121,7 +133,7 @@ jobs:
           push-to-registry: true
           create-storage-record: false
       - name: Verify published provenance
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
           IMAGE: ${{ steps.image.outputs.name }}
@@ -137,7 +149,7 @@ jobs:
             --predicate-type https://slsa.dev/provenance/v1 \
             --deny-self-hosted-runners
       - name: Write deployment image metadata
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push'
         env:
           IMAGE: ${{ steps.image.outputs.name }}
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -145,21 +157,29 @@ jobs:
           PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
         run: python3 scripts/write-image-metadata.py
       - name: Sign deployment metadata
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push'
         id: metadata
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: dist/images.lock.json
       - name: Collect metadata signature
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push'
         env:
           METADATA_BUNDLE: ${{ steps.metadata.outputs.bundle-path }}
         run: cp -- "$METADATA_BUNDLE" dist/images.lock.sigstore.json
       - name: Publish deployment metadata
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: hiro-proxy-image-${{ github.sha }}-${{ github.run_attempt }}
           path: dist/
           if-no-files-found: error
           retention-days: 90
+      - name: Publish versioned release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --verify-tag --target "$GITHUB_SHA" --title "$GITHUB_REF_NAME" \
+            --notes-file dist/release-notes.md

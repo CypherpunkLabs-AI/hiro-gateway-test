@@ -1,4 +1,4 @@
-use std::{env, net::SocketAddr, time::Duration};
+use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
 
 use anyhow::{Context, bail};
 
@@ -7,7 +7,8 @@ pub struct Config {
     pub inference: crate::inference::config::Config,
     pub auth: crate::auth::AuthConfig,
     pub bind_address: SocketAddr,
-    pub dstack_endpoint: String,
+    pub tdx_report_dir: PathBuf,
+    pub attestation_dir: PathBuf,
     pub phala_base_url: String,
     pub phala_api_key: String,
     pub accepted_subjects: Vec<String>,
@@ -29,14 +30,14 @@ impl Config {
     /// Loads immutable trust policy and runtime settings.
     ///
     /// Trust anchors deliberately have no defaults. A deployment cannot start
-    /// until the accepted Phala ACI identity and dstack KMS root are pinned.
+    /// until the remote Phala inference identity and its KMS root are pinned.
+    /// These settings do not provision or attest the local GCP guest.
     /// # Errors
     /// Rejects invalid configuration or unavailable required confidential services.
     pub fn from_env() -> anyhow::Result<Self> {
         let bind_address = value_or("HIRO_BIND_ADDRESS", "0.0.0.0:8080")
             .parse()
             .context("HIRO_BIND_ADDRESS must be a socket address")?;
-        let dstack_endpoint = value_or("DSTACK_ENDPOINT", "/var/run/dstack.sock");
         let phala_base_url = required("PHALA_ACI_BASE_URL")?
             .trim_end_matches('/')
             .to_owned();
@@ -57,7 +58,8 @@ impl Config {
             inference: crate::inference::config::Config::from_env()?,
             auth: crate::auth::AuthConfig::from_env()?,
             bind_address,
-            dstack_endpoint,
+            tdx_report_dir: value_or("HIRO_TDX_REPORT_DIR", "/run/hiro/tdx-report").into(),
+            attestation_dir: value_or("HIRO_ATTESTATION_DIR", "/run/hiro/attestation").into(),
             phala_base_url,
             phala_api_key: required("PHALA_API_KEY")?,
             accepted_subjects,

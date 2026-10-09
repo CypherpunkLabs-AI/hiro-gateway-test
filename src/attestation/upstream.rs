@@ -10,7 +10,6 @@ use serde::Serialize;
 use serde_json::Value;
 use std::{
     collections::BTreeSet,
-    sync::Arc,
     time::{Duration, Instant},
 };
 use tokio::sync::Mutex;
@@ -302,25 +301,4 @@ impl InferenceVerifier {
             pins,
         })
     }
-}
-
-/// Verify upstream inference evidence before accepting application traffic.
-///
-/// # Errors
-/// Returns an error if the upstream attestation preflight fails.
-pub async fn verify_before_listening(
-    verifier: &Arc<InferenceVerifier>,
-    origin: &str,
-) -> Result<()> {
-    verifier
-        .verify(VerificationRequest {
-            upstream_name: "phala-aci".into(),
-            url_origin: Some(origin.into()),
-            model_id: "startup-preflight".into(),
-            forwarded_body_hash: String::new(),
-            path: String::new(),
-            required: true,
-        })
-        .await?;
-    Ok(())
 }

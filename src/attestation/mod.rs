@@ -1,15 +1,6 @@
-//! dstack keys, evidence assembly and upstream hardware acceptance.
-pub mod bootstrap;
+//! Ephemeral guest identity, direct TDX evidence, and verified remote inference.
 pub mod evidence;
-pub mod gate;
 pub mod keys;
-mod kms;
-pub mod provisioning;
-pub mod snapshot;
+pub mod tdx;
 mod upstream;
-pub mod worker;
-pub use upstream::{
-    InferenceVerifier, VerificationRequest, VerifiedUpstream, verify_before_listening,
-};
-
-pub(crate) mod verification;
+pub use upstream::{InferenceVerifier, VerificationRequest, VerifiedUpstream};

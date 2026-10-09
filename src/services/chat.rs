@@ -41,13 +41,12 @@ impl ChatService {
     ///
     /// # Errors
     /// Returns an error if the quota database or usage dispatcher cannot be initialized.
-    pub async fn new(identity: Arc<Service>, config: Config) -> anyhow::Result<Self> {
+    pub fn new(identity: Arc<Service>, config: Config) -> anyhow::Result<Self> {
         let db = PgPoolOptions::new()
             .max_connections(config.database_max_connections)
             .acquire_timeout(Duration::from_secs(5))
-            .connect(config.database_url.expose_secret())
-            .await
-            .map_err(|_| anyhow::anyhow!("inference quota database unavailable"))?;
+            .connect_lazy(config.database_url.expose_secret())
+            .map_err(|_| anyhow::anyhow!("invalid inference quota database configuration"))?;
         let usage = UsageDispatcher::start(&config.usage_queue)?;
         Ok(Self {
             identity,

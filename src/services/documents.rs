@@ -32,23 +32,17 @@ pub struct VisionGateway {
 impl DocumentGateway {
     /// # Errors
     /// Rejects invalid configuration or unavailable required confidential services.
-    pub fn new(url: String) -> Result<Self> {
-        let parsed = reqwest::Url::parse(&url)?;
-        ensure!(
-            matches!(parsed.scheme(), "http" | "https")
-                && parsed.host_str().is_some()
-                && parsed.username().is_empty()
-                && parsed.password().is_none(),
-            "invalid document router URL"
-        );
+    pub fn new(socket: std::path::PathBuf) -> Result<Self> {
+        ensure!(socket.is_absolute(), "document socket must be absolute");
         Ok(Self {
             client: reqwest::Client::builder()
+                .unix_socket(socket)
                 .no_proxy()
                 .redirect(reqwest::redirect::Policy::none())
                 .connect_timeout(Duration::from_secs(3))
                 .timeout(Duration::from_mins(10))
                 .build()?,
-            convert_url: url,
+            convert_url: "http://localhost/v1/convert/file".into(),
             slots: Arc::new(Semaphore::new(2)),
         })
     }

@@ -1,5 +1,4 @@
 //! WSS carrier for the shared Oak protocol. Private dispatch never crosses a socket.
-use crate::attestation::gate::Gate;
 use crate::services::inference::Service;
 use crate::transport::{
     Flow, ServerChannel, Side,
@@ -7,10 +6,10 @@ use crate::transport::{
 };
 use anyhow::{Context, ensure};
 use axum::{
-    Router,
+    Json, Router,
     body::{Body, Bytes},
     extract::{
-        State, WebSocketUpgrade,
+        Query, State, WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
     http::{HeaderMap, Request, StatusCode},
@@ -31,43 +30,75 @@ pub struct Gateway {
     service: Arc<Service>,
     binding: Arc<SigningKey>,
     inner: Router,
-    evidence: Gate,
     slots: Arc<Semaphore>,
     quotes: Arc<Semaphore>,
 }
 impl Gateway {
-    /// Configure in-CVM transport with public evidence artifacts.
-    /// # Errors
-    /// Rejects unavailable, malformed or excessive evidence metadata.
-    pub fn new(
-        service: Arc<Service>,
-        binding: Arc<SigningKey>,
-        inner: Router,
-        evidence: Gate,
-    ) -> anyhow::Result<Self> {
-        Ok(Self {
+    /// Configure the encrypted carrier with challenge-bound hardware evidence.
+    #[must_use]
+    pub fn new(service: Arc<Service>, binding: Arc<SigningKey>, inner: Router) -> Self {
+        Self {
             service,
             binding,
             inner,
-            evidence,
             slots: Arc::new(Semaphore::new(8)),
             quotes: Arc::new(Semaphore::new(2)),
-        })
+        }
     }
     pub fn router(self) -> Router {
         Router::new()
             .route("/v1/session", get(upgrade))
+            .route("/v1/attestation", get(attestation))
+            .route("/ready", get(ready))
             .with_state(self)
     }
 }
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Challenge {
+    nonce: String,
+}
+
+async fn attestation(State(state): State<Gateway>, Query(challenge): Query<Challenge>) -> Response {
+    let nonce = challenge.nonce;
+    if nonce.len() != 64
+        || !nonce
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let response = match state.service.attestation_report(Some(nonce)).await {
+        Ok(report) => Json(report).into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    ([("cache-control", "no-store")], response).into_response()
+}
+
+// Readiness concerns the attested transport. Application dependencies are
+// checked on use, so a missing database never disables public attestation.
+async fn ready(State(state): State<Gateway>) -> StatusCode {
+    let mut nonce = [0_u8; 32];
+    if getrandom::getrandom(&mut nonce).is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE;
+    }
+    if state
+        .service
+        .attestation_report(Some(hex::encode(nonce)))
+        .await
+        .is_ok()
+    {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    }
+}
+
 async fn upgrade(
     State(state): State<Gateway>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
-    if !state.evidence.ready().await {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    }
     if !headers
         .get("sec-websocket-protocol")
         .and_then(|h| h.to_str().ok())
@@ -129,11 +160,7 @@ async fn serve(mut socket: WebSocket, state: Gateway) -> anyhow::Result<()> {
         let nonce = crate::transport::parse_initialize(&binary(&mut socket).await?)?;
         let _quote = state.quotes.clone().try_acquire_owned()?;
         let report = state.service.attestation_report(Some(nonce)).await?;
-        let evidence = state
-            .evidence
-            .metadata()
-            .await?
-            .with_report(serde_json::to_value(report)?)?;
+        let evidence = serde_json::to_vec(&report)?;
         let (mut channel, flight) = ServerChannel::new(evidence, state.binding.clone())?;
         socket.send(Message::Binary(flight.into())).await?;
         for _ in 0..2 {
@@ -146,10 +173,6 @@ async fn serve(mut socket: WebSocket, state: Gateway) -> anyhow::Result<()> {
             }
         }
         ensure!(channel.is_open(), "incomplete Oak handshake");
-        ensure!(
-            state.evidence.ready().await,
-            "evidence expired during handshake"
-        );
         Ok::<_, anyhow::Error>((channel, ()))
     })
     .await??;

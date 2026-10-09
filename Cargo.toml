@@ -10,15 +10,8 @@ repository = "https://github.com/cypherpunklabs-ai/hiro-proxy"
 [dependencies]
 prost = "=0.14.3"
 # Oak is supplied by its upstream Bazel targets in BUILD.bazel.
-attestation-verify = "=0.1.0"
-serde_yaml_ng = "=0.10.0"
-sha3 = "=0.10.9"
 evidence-sha2 = { package = "sha2", version = "=0.10.9" }
-evidence-k256 = { package = "k256", version = "=0.13.4", default-features = false, features = ["ecdsa", "std"] }
-dstack-sdk = "=0.1.3"
-# Upstream dstack's decoder has its own Bazel crate graph (see MODULE.bazel).
 ed25519-dalek = { version = "3.0.0", features = ["zeroize"] }
-k256 = { version = "=0.14.0", features = ["ecdsa"] }
 hex = "=0.4.3"
 libc = "0.2"
 zeroize = "=1.9.1"

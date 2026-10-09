@@ -11,13 +11,12 @@ use crate::{
 };
 use aci_protocol::{
     digest,
-    identity::{attestation_statement, report_data},
+    identity::{attestation_statement, report_data, report_data_slot},
     types::{AttestationEnvelope, AttestationReport, ServiceCapabilities, WorkloadKeyset},
 };
 use anyhow::{Context, ensure};
 use axum::{body::Body, response::Response};
 use futures_util::StreamExt;
-use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
@@ -25,6 +24,7 @@ const MAX_BODY: usize = 64 * 1024 * 1024;
 
 pub struct Service {
     keys: Arc<OakKeys>,
+    attester: crate::attestation::tdx::Attester,
     keyset: Keyset,
     config: ServiceConfig,
     upstream: Arc<InferenceBackend>,
@@ -33,11 +33,12 @@ pub struct Service {
 }
 
 impl Service {
-    /// Seal the keyset supplied by the direct dstack adapter.
+    /// Seal the process-local keyset and attach the direct TDX attester.
     /// # Errors
     /// Rejects invalid source provenance, expired identity or unexpected key roles.
     pub fn new(
         keys: Arc<OakKeys>,
+        attester: crate::attestation::tdx::Attester,
         upstream: Arc<InferenceBackend>,
         verifier: Arc<InferenceVerifier>,
         config: ServiceConfig,
@@ -69,6 +70,7 @@ impl Service {
         })?;
         Ok(Self {
             keys,
+            attester,
             keyset,
             config,
             upstream,
@@ -83,7 +85,7 @@ impl Service {
 
     /// Produce challenge-bound evidence using the established ACI encoding.
     /// # Errors
-    /// Rejects malformed challenges, expired identity or failed dstack quotes.
+    /// Rejects malformed challenges, expired identity or failed hardware quotes.
     pub async fn attestation_report(
         &self,
         nonce: Option<String>,
@@ -102,7 +104,7 @@ impl Service {
         );
         let statement = attestation_statement(self.keyset.digest(), Some(&nonce))?;
         let data = report_data(&statement);
-        let quote = self.keys.get_quote(data).await?;
+        let evidence = self.attester.evidence(report_data_slot(data)).await?;
         Ok(AttestationReport {
             api_version: "aci/1".into(),
             workload_keyset_digest: self.keyset.digest().into(),
@@ -111,9 +113,7 @@ impl Service {
                 workload_keyset: self.keyset.to_value(),
                 report_data_hex: hex::encode(data),
                 source_provenance: self.config.source_provenance.clone(),
-                evidence: json!({"quote":hex::encode(quote.raw_quote), "quote_report_data":hex::encode(quote.report_data),
-                    "event_log":quote.event_log, "vm_config":quote.vm_config, "app_compose":quote.app_compose,
-                    "key_custody":self.keys.key_custody_evidence()}),
+                evidence,
             },
             service_capabilities: ServiceCapabilities::default(),
         })

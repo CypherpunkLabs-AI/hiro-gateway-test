@@ -22,7 +22,7 @@ def main():
         raise ValueError("Image must belong to the source repository")
     digest = required("DIGEST", r"sha256:[0-9a-f]{64}")
     commit = required("GITHUB_SHA", r"[0-9a-f]{40}")
-    ref = required("GITHUB_REF", r"refs/heads/main")
+    ref = required("GITHUB_REF", r"refs/(heads/main|tags/v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?)")
     workflow_commit = required("WORKFLOW_COMMIT", r"[0-9a-f]{40}")
     document = {
         "schema": 1,
@@ -35,6 +35,7 @@ def main():
                 "source_ref": ref,
                 "build_workflow": ".github/workflows/ci.yml",
                 "workflow_commit": workflow_commit,
+                "runtime_profile": "hiro.gcp-tdx.v1",
             }
         },
     }
@@ -44,6 +45,13 @@ def main():
     (output / "image-ref.txt").write_text(f"{image}@{digest}\n")
     (output / "image-digest.txt").write_text(digest + "\n")
     shutil.copyfile(os.environ["PROVENANCE_BUNDLE"], output / "image.sigstore.json")
+    (output / "release-notes.md").write_text(
+        f"Hiro proxy `{commit}`\n\nImage: `{image}@{digest}`\n\n"
+        "Runtime profile: `hiro.gcp-tdx.v1`. Linux amd64, UID/GID 65532, port 8080.\n\n"
+        "Import `images.lock.json` with its Sigstore bundle into the hiro release repository. "
+        "Deploy the digest, never a mutable tag. The guest runtime contract is in "
+        "`docs/GCP_TDX.md` at the source commit.\n"
+    )
     files = sorted(output / name for name in (
         "images.lock.json", "image-ref.txt", "image-digest.txt", "image.sigstore.json",
     ))

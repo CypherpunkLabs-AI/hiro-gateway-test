@@ -14,7 +14,7 @@ pub mod wire;
 /// Required WebSocket subprotocol; credentials never belong here or in the URL.
 pub const SUBPROTOCOL: &str = "cypherpunk-session-v1";
 /// Sole accepted Oak assertion identifier.
-pub const ASSERTION_ID: &str = "cypherpunk.phala-tdx.v1";
+pub const ASSERTION_ID: &str = "hiro.gcp-tdx.v1";
 /// Maximum carrier message, enforced before protobuf decoding.
 pub const MAX_FRAME: usize = 5 * 1024 * 1024;
 /// Maximum individual request/response body chunk.

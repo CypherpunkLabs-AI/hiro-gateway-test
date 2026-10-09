@@ -5,12 +5,16 @@ use anyhow::Context;
 use axum::{Router, http::StatusCode, routing::get};
 use hiro_proxy::{
     attestation::evidence::{ServiceConfig, now_secs},
-    attestation::{InferenceVerifier, verify_before_listening},
+    attestation::{InferenceVerifier, tdx::Attester},
     config::Config,
     inference::upstream::InferenceBackend,
     services::documents::{DocumentGateway, VisionGateway},
 };
-use tokio::net::TcpListener;
+use std::{
+    os::unix::fs::{FileTypeExt, PermissionsExt},
+    path::PathBuf,
+};
+use tokio::net::{TcpListener, UnixListener};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -28,41 +32,17 @@ async fn main() -> anyhow::Result<()> {
     match arguments.as_slice() {
         [] => {}
         [command] if command == "serve" => {}
-        [command] if command == "evidence" => {
-            return hiro_proxy::attestation::worker::run(
-                hiro_proxy::attestation::worker::Config::from_env()?,
-            )
-            .await;
-        }
-        [command] if command == "evidence-health" => {
-            return hiro_proxy::attestation::worker::health();
-        }
-        [command, input, expected, output] if command == "prepare-platform" => {
-            return hiro_proxy::attestation::provisioning::prepare(
-                input.as_ref(),
-                expected.as_ref(),
-                output.as_ref(),
-            )
-            .await;
-        }
-        [command, origin, ca, output] if command == "collect-kms" => {
-            return hiro_proxy::attestation::provisioning::collect_kms(
-                origin,
-                ca.as_ref(),
-                output.as_ref(),
-            )
-            .await;
-        }
-        _ => anyhow::bail!(
-            "usage: hiro-proxy [serve|evidence|evidence-health|prepare-platform INPUT EXPECTED OUTPUT|collect-kms ORIGIN CA OUTPUT]"
-        ),
+        _ => anyhow::bail!("usage: hiro-proxy [serve]"),
     }
     let config = Config::from_env().context("invalid configuration")?;
     let jwt_verifier = hiro_proxy::auth::JwtVerifier::new(&config.auth)
         .context("invalid authentication configuration")?;
 
-    let oak_keys =
-        Arc::new(hiro_proxy::attestation::keys::OakKeys::new(&config.dstack_endpoint).await?);
+    let oak_keys = Arc::new(hiro_proxy::attestation::keys::OakKeys::new()?);
+    let attester = Attester::new(
+        config.tdx_report_dir.clone(),
+        config.attestation_dir.clone(),
+    )?;
 
     let verifier = Arc::new(InferenceVerifier::new(&config)?);
 
@@ -78,6 +58,7 @@ async fn main() -> anyhow::Result<()> {
 
     let service = hiro_proxy::services::inference::Service::new(
         oak_keys.clone(),
+        attester,
         upstream.clone(),
         verifier.clone(),
         ServiceConfig {
@@ -98,38 +79,13 @@ async fn main() -> anyhow::Result<()> {
     // Hiro's HTTP handlers are in-process only. Oak's method/path/header
     // allowlist gates every request; this router is never served on a listener.
     let service = Arc::new(service);
-    // Bootstrap is independent of supporting evidence, database connectivity and
-    // upstream attestation. It exposes only public challenge-bound reports.
-    let socket =
-        std::env::var("HIRO_EVIDENCE_SOCKET").context("HIRO_EVIDENCE_SOCKET is required")?;
-    let mut bootstrap =
-        hiro_proxy::attestation::bootstrap::start(std::path::Path::new(&socket), service.clone())
-            .await?;
-    let evidence_path =
-        std::env::var("HIRO_OAK_EVIDENCE_PATH").context("HIRO_OAK_EVIDENCE_PATH is required")?;
-    let state =
-        std::env::var("HIRO_EVIDENCE_STATE_DIR").context("HIRO_EVIDENCE_STATE_DIR is required")?;
-    let trust =
-        std::env::var("HIRO_TRUST_CONFIG_PATH").context("HIRO_TRUST_CONFIG_PATH is required")?;
-    let roots = std::env::var("HIRO_SIGSTORE_ROOTS_PATH")
-        .context("HIRO_SIGSTORE_ROOTS_PATH is required")?;
-    let authority = hiro_proxy::attestation::snapshot::Authority::open(
-        std::path::Path::new(&state),
-        std::path::Path::new(&trust),
-        std::path::Path::new(&roots),
-    )?;
-    let (evidence, mut evidence_task) = hiro_proxy::attestation::gate::Gate::start(
-        evidence_path.into(),
-        authority,
+    let chat = Arc::new(hiro_proxy::services::chat::ChatService::new(
         service.clone(),
-    );
-    verify_before_listening(&verifier, &config.phala_base_url).await?;
-    let chat = Arc::new(
-        hiro_proxy::services::chat::ChatService::new(service.clone(), config.inference.clone())
-            .await?,
-    );
+        config.inference.clone(),
+    )?);
     let mut oak_inner = hiro_proxy::api::inference::router(chat);
-    if let Ok(document_url) = std::env::var("DOCUMENT_ROUTER_URL") {
+    let mut broker_task = None;
+    if let Ok(document_socket) = std::env::var("DOCUMENT_ROUTER_SOCKET") {
         let token = std::env::var("DOCUMENT_VISION_BROKER_TOKEN")
             .context("DOCUMENT_VISION_BROKER_TOKEN is required")?;
         anyhow::ensure!(
@@ -142,10 +98,24 @@ async fn main() -> anyhow::Result<()> {
             !model.trim().is_empty(),
             "document vision model cannot be empty"
         );
-        let bind = std::env::var("DOCUMENT_VISION_BIND").unwrap_or_else(|_| "0.0.0.0:8082".into());
-        let broker_listener = TcpListener::bind(&bind)
-            .await
-            .context("bind private vision listener")?;
+        let socket = PathBuf::from(
+            std::env::var("DOCUMENT_VISION_SOCKET")
+                .context("DOCUMENT_VISION_SOCKET is required")?,
+        );
+        anyhow::ensure!(socket.is_absolute(), "vision socket must be absolute");
+        match std::fs::symlink_metadata(&socket) {
+            Ok(metadata) => {
+                anyhow::ensure!(
+                    metadata.file_type().is_socket(),
+                    "vision socket path is occupied"
+                );
+                std::fs::remove_file(&socket)?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        let broker_listener = UnixListener::bind(&socket).context("bind private vision socket")?;
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o660))?;
         let broker = VisionGateway {
             backend: upstream,
             verifier,
@@ -153,40 +123,23 @@ async fn main() -> anyhow::Result<()> {
             token,
             slots: Arc::new(tokio::sync::Semaphore::new(2)),
         };
-        tokio::spawn(async move {
-            if let Err(error) = axum::serve(
+        broker_task = Some(tokio::spawn(async move {
+            axum::serve(
                 broker_listener,
                 hiro_proxy::api::documents::vision_router(broker),
             )
             .await
-            {
-                tracing::error!(error = %error, "private vision listener failed");
-            }
-        });
-        let documents = DocumentGateway::new(document_url)?;
+        }));
+        let documents = DocumentGateway::new(document_socket.into())?;
         oak_inner = oak_inner.merge(hiro_proxy::api::documents::document_router(documents));
     }
     let oak = hiro_proxy::transport::oak::Gateway::new(
         service,
         oak_keys.binding.clone(),
         hiro_proxy::auth::protect(oak_inner, jwt_verifier),
-        evidence.clone(),
-    )?;
+    );
     let app = Router::new()
         .route("/health", get(|| async { StatusCode::OK }))
-        .route(
-            "/ready",
-            get(move || {
-                let evidence = evidence.clone();
-                async move {
-                    if evidence.ready().await {
-                        StatusCode::OK
-                    } else {
-                        StatusCode::SERVICE_UNAVAILABLE
-                    }
-                }
-            }),
-        )
         .merge(oak.router());
     let listener = TcpListener::bind(config.bind_address)
         .await
@@ -198,20 +151,21 @@ async fn main() -> anyhow::Result<()> {
         upstream = %config.phala_base_url,
         "Hiro Oak gateway listening"
     );
-    let result = tokio::select! {
-        result = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()) => result.context("HTTP server failed"),
-        result = &mut bootstrap => {
-            result.context("private evidence task panicked")??;
-            Err(anyhow::anyhow!("private evidence task stopped"))
+    tokio::select! {
+        result = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()) => {
+            if let Some(task) = broker_task { task.abort(); }
+            result.context("HTTP server failed")
         },
-        result = &mut evidence_task => {
-            result.context("evidence verification task panicked")?;
-            Err(anyhow::anyhow!("evidence verification task stopped"))
+        result = async {
+            match &mut broker_task {
+                Some(task) => task.await,
+                None => std::future::pending().await,
+            }
+        } => {
+            result.context("private vision task panicked")??;
+            anyhow::bail!("private vision listener stopped")
         },
-    };
-    bootstrap.abort();
-    evidence_task.abort();
-    result
+    }
 }
 
 async fn shutdown_signal() {
