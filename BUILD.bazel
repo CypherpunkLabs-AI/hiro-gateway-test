@@ -34,6 +34,7 @@ rust_binary(
 rust_test(
     name = "hiro_proxy_tests",
     crate = ":hiro_proxy",
+    deps = all_crate_deps(normal_dev = True),
 )
 
 rust_test(

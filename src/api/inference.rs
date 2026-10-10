@@ -1,5 +1,6 @@
 //! Authenticated application routes, dispatched inside the Oak session only.
 use crate::{
+    attestation::evidence::Keyset,
     auth::User,
     inference::{
         error::ApiError,
@@ -9,7 +10,7 @@ use crate::{
     services::chat::ChatService,
 };
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     body::to_bytes,
     extract::{Request, State},
     response::{
@@ -33,6 +34,7 @@ pub fn router(service: Arc<ChatService>) -> Router {
 
 async fn chat(
     State(state): State<Arc<ChatService>>,
+    Extension(identity): Extension<Arc<Keyset>>,
     user: User,
     request: Request,
 ) -> Result<Response, ApiError> {
@@ -69,6 +71,7 @@ async fn chat(
     let (response, receipt) = state
         .identity
         .open_inference(
+            &identity,
             "/v3/chat/completions",
             input.model.as_deref(),
             &received,
@@ -118,6 +121,7 @@ struct TitleRequest {
 
 async fn title(
     State(state): State<Arc<ChatService>>,
+    Extension(identity): Extension<Arc<Keyset>>,
     user: User,
     request: Request,
 ) -> Result<Response, ApiError> {
@@ -139,7 +143,7 @@ async fn title(
         state.request_body(user.id(), crate::inference::GLM_MODEL, &messages, 0.2, 64)?;
     let (response, receipt) = state
         .identity
-        .open_inference("/v3/chat/title", None, &received, forwarded)
+        .open_inference(&identity, "/v3/chat/title", None, &received, forwarded)
         .await
         .map_err(|_| ApiError::Unavailable)?;
     let mut events = stream::decode(response).map_err(|_| ApiError::Unavailable)?;

@@ -4,7 +4,7 @@ use aci_protocol::types::SourceProvenance;
 use anyhow::Context;
 use axum::{Router, http::StatusCode, routing::get};
 use hiro_proxy::{
-    attestation::evidence::{ServiceConfig, now_secs},
+    attestation::evidence::ServiceConfig,
     attestation::{InferenceVerifier, tdx::Attester},
     config::Config,
     inference::upstream::InferenceBackend,
@@ -35,6 +35,8 @@ async fn main() -> anyhow::Result<()> {
         _ => anyhow::bail!("usage: hiro-proxy [serve]"),
     }
     let config = Config::from_env().context("invalid configuration")?;
+    // Check RAM storage and disabled swap before generating any service keys.
+    let tls = hiro_proxy::tls::Server::new(config.tls.clone())?;
     let jwt_verifier = hiro_proxy::auth::JwtVerifier::new(&config.auth)
         .context("invalid authentication configuration")?;
 
@@ -68,16 +70,12 @@ async fn main() -> anyhow::Result<()> {
                 image_digest: config.image_digest.clone(),
                 image_provenance: None,
             },
-            keyset_not_after: now_secs().saturating_add(config.keyset_ttl.as_secs()),
+            keyset_ttl_seconds: config.keyset_ttl.as_secs(),
             subject: config.subject.clone(),
             receipt_ttl_seconds: config.receipt_ttl.as_secs(),
         },
     )
     .context("failed to seal Hiro ACI service identity")?;
-    let keyset_digest = service.workload_keyset_digest().to_owned();
-
-    // Hiro's HTTP handlers are in-process only. Oak's method/path/header
-    // allowlist gates every request; this router is never served on a listener.
     let service = Arc::new(service);
     let chat = Arc::new(hiro_proxy::services::chat::ChatService::new(
         service.clone(),
@@ -134,7 +132,7 @@ async fn main() -> anyhow::Result<()> {
         oak_inner = oak_inner.merge(hiro_proxy::api::documents::document_router(documents));
     }
     let oak = hiro_proxy::transport::oak::Gateway::new(
-        service,
+        service.clone(),
         oak_keys.binding.clone(),
         hiro_proxy::auth::protect(oak_inner, jwt_verifier),
     );
@@ -144,17 +142,19 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(config.bind_address)
         .await
         .with_context(|| format!("failed to bind {}", config.bind_address))?;
-
     info!(
         address = %config.bind_address,
-        keyset_digest,
         upstream = %config.phala_base_url,
-        "Hiro Oak gateway listening"
+        "Hiro HTTPS/WSS gateway listening"
     );
     tokio::select! {
-        result = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()) => {
+        result = tls.serve(listener, app, service) => {
             if let Some(task) = broker_task { task.abort(); }
-            result.context("HTTP server failed")
+            result.context("TLS server failed")
+        },
+        () = shutdown_signal() => {
+            if let Some(task) = broker_task { task.abort(); }
+            Ok(())
         },
         result = async {
             match &mut broker_task {
@@ -190,8 +190,12 @@ async fn shutdown_signal() {
 }
 
 fn init_tracing() {
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("hiro_proxy=info"));
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("hiro_proxy=info"))
+        // ACME dependency debug/error messages can contain complete HTTP bodies.
+        // Emit only the redacted lifecycle messages in tls::Server instead.
+        .add_directive("rustls_acme=off".parse().expect("static log filter"))
+        .add_directive("async_web_client=off".parse().expect("static log filter"));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .json()

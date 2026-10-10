@@ -25,5 +25,5 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certifi
 COPY --from=builder --chown=65532:65532 /out/hiro-proxy /usr/local/bin/hiro-proxy
 
 USER 65532:65532
-EXPOSE 8080
+EXPOSE 8443
 ENTRYPOINT ["/usr/local/bin/hiro-proxy"]

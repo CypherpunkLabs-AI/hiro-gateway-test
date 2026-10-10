@@ -1,4 +1,5 @@
 //! WSS carrier for the shared Oak protocol. Private dispatch never crosses a socket.
+use crate::attestation::evidence::Keyset;
 use crate::services::inference::Service;
 use crate::transport::{
     Flow, ServerChannel, Side,
@@ -6,7 +7,7 @@ use crate::transport::{
 };
 use anyhow::{Context, ensure};
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     body::{Body, Bytes},
     extract::{
         Query, State, WebSocketUpgrade,
@@ -59,7 +60,11 @@ struct Challenge {
     nonce: String,
 }
 
-async fn attestation(State(state): State<Gateway>, Query(challenge): Query<Challenge>) -> Response {
+async fn attestation(
+    State(state): State<Gateway>,
+    Extension(identity): Extension<Arc<Keyset>>,
+    Query(challenge): Query<Challenge>,
+) -> Response {
     let nonce = challenge.nonce;
     if nonce.len() != 64
         || !nonce
@@ -68,7 +73,11 @@ async fn attestation(State(state): State<Gateway>, Query(challenge): Query<Chall
     {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    let response = match state.service.attestation_report(Some(nonce)).await {
+    let response = match state
+        .service
+        .attestation_report(&identity, Some(nonce))
+        .await
+    {
         Ok(report) => Json(report).into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
@@ -77,14 +86,17 @@ async fn attestation(State(state): State<Gateway>, Query(challenge): Query<Chall
 
 // Readiness concerns the attested transport. Application dependencies are
 // checked on use, so a missing database never disables public attestation.
-async fn ready(State(state): State<Gateway>) -> StatusCode {
+async fn ready(
+    State(state): State<Gateway>,
+    Extension(identity): Extension<Arc<Keyset>>,
+) -> StatusCode {
     let mut nonce = [0_u8; 32];
     if getrandom::getrandom(&mut nonce).is_err() {
         return StatusCode::SERVICE_UNAVAILABLE;
     }
     if state
         .service
-        .attestation_report(Some(hex::encode(nonce)))
+        .attestation_report(&identity, Some(hex::encode(nonce)))
         .await
         .is_ok()
     {
@@ -96,6 +108,7 @@ async fn ready(State(state): State<Gateway>) -> StatusCode {
 
 async fn upgrade(
     State(state): State<Gateway>,
+    Extension(identity): Extension<Arc<Keyset>>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
@@ -118,7 +131,7 @@ async fn upgrade(
         .on_upgrade(move |socket| async move {
             let _permit = permit;
             // Errors deliberately omit peer payloads, tokens, evidence and key data.
-            if serve(socket, state).await.is_err() {
+            if serve(socket, state, identity).await.is_err() {
                 tracing::debug!("Oak connection closed before authenticated completion");
             }
         })
@@ -154,12 +167,15 @@ async fn send(
     clippy::single_match_else,
     reason = "explicit timeout outcome branches"
 )]
-async fn serve(mut socket: WebSocket, state: Gateway) -> anyhow::Result<()> {
+async fn serve(mut socket: WebSocket, state: Gateway, identity: Arc<Keyset>) -> anyhow::Result<()> {
     let deadline = Instant::now() + Duration::from_mins(15);
     let (mut channel, ()) = timeout(Duration::from_mins(1), async {
         let nonce = crate::transport::parse_initialize(&binary(&mut socket).await?)?;
         let _quote = state.quotes.clone().try_acquire_owned()?;
-        let report = state.service.attestation_report(Some(nonce)).await?;
+        let report = state
+            .service
+            .attestation_report(&identity, Some(nonce))
+            .await?;
         let evidence = serde_json::to_vec(&report)?;
         let (mut channel, flight) = ServerChannel::new(evidence, state.binding.clone())?;
         socket.send(Message::Binary(flight.into())).await?;
@@ -192,7 +208,15 @@ async fn serve(mut socket: WebSocket, state: Gateway) -> anyhow::Result<()> {
         let request_deadline = deadline.min(Instant::now() + Duration::from_mins(11));
         let result = timeout_at(
             request_deadline,
-            operation(&mut socket, &mut channel, &mut flow, &id, start, &state),
+            operation(
+                &mut socket,
+                &mut channel,
+                &mut flow,
+                &id,
+                start,
+                &state,
+                &identity,
+            ),
         )
         .await;
         match result {
@@ -251,6 +275,7 @@ async fn operation(
     id: &[u8],
     start: wire::Start,
     state: &Gateway,
+    identity: &Arc<Keyset>,
 ) -> anyhow::Result<()> {
     let mut body = Vec::new();
     loop {
@@ -282,7 +307,8 @@ async fn operation(
     for header in &start.headers {
         request = request.header(&header.name, &header.value);
     }
-    let request = request.body(Body::from(body))?;
+    let mut request = request.body(Body::from(body))?;
+    request.extensions_mut().insert(identity.clone());
     let (tx, mut rx) = mpsc::channel::<Output>(2);
     let inner = state.inner.clone();
     let task = tokio::spawn(async move { dispatch(inner, request, tx).await });

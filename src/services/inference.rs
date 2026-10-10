@@ -12,7 +12,7 @@ use crate::{
 use aci_protocol::{
     digest,
     identity::{attestation_statement, report_data, report_data_slot},
-    types::{AttestationEnvelope, AttestationReport, ServiceCapabilities, WorkloadKeyset},
+    types::{AttestationEnvelope, AttestationReport, ServiceCapabilities, TlsSpki, WorkloadKeyset},
 };
 use anyhow::{Context, ensure};
 use axum::{body::Body, response::Response};
@@ -25,7 +25,6 @@ const MAX_BODY: usize = 64 * 1024 * 1024;
 pub struct Service {
     keys: Arc<OakKeys>,
     attester: crate::attestation::tdx::Attester,
-    keyset: Keyset,
     config: ServiceConfig,
     upstream: Arc<InferenceBackend>,
     verifier: Arc<InferenceVerifier>,
@@ -45,8 +44,8 @@ impl Service {
     ) -> anyhow::Result<Self> {
         validate_source_provenance(&config.source_provenance)?;
         ensure!(
-            config.keyset_not_after > now_secs(),
-            "expired service identity"
+            config.keyset_ttl_seconds > 0,
+            "empty service identity lifetime"
         );
         let receipts = keys.receipt_keys();
         let bindings = keys.binding_keys();
@@ -59,19 +58,9 @@ impl Service {
                 && receipts[0].public_key_hex != bindings[0].public_key_hex,
             "invalid key roles"
         );
-        // OakKeys owns validated SigningKeys; callers cannot supply arbitrary
-        // public descriptors or an alternative provider to this constructor.
-        let keyset = Keyset::new(WorkloadKeyset {
-            subject: config.subject.clone(),
-            not_after: config.keyset_not_after,
-            receipt_signing_keys: receipts,
-            e2ee_public_keys: bindings,
-            tls_public_keys: Vec::new(),
-        })?;
         Ok(Self {
             keys,
             attester,
-            keyset,
             config,
             upstream,
             verifier,
@@ -79,8 +68,22 @@ impl Service {
         })
     }
 
-    pub fn workload_keyset_digest(&self) -> &str {
-        self.keyset.digest()
+    /// Snapshot the identity of the certificate selected for one TLS connection.
+    /// Renewal must not change the keyset of an already established Oak session.
+    /// # Errors
+    /// Rejects expired certificates or an invalid identity encoding.
+    pub fn keyset_for_tls(&self, tls: TlsSpki, certificate_expiry: u64) -> anyhow::Result<Keyset> {
+        let now = now_secs();
+        ensure!(certificate_expiry > now, "expired TLS certificate");
+        Keyset::new(WorkloadKeyset {
+            subject: self.config.subject.clone(),
+            not_after: now
+                .saturating_add(self.config.keyset_ttl_seconds)
+                .min(certificate_expiry),
+            receipt_signing_keys: self.keys.receipt_keys(),
+            e2ee_public_keys: self.keys.binding_keys(),
+            tls_public_keys: vec![tls],
+        })
     }
 
     /// Produce challenge-bound evidence using the established ACI encoding.
@@ -88,10 +91,11 @@ impl Service {
     /// Rejects malformed challenges, expired identity or failed hardware quotes.
     pub async fn attestation_report(
         &self,
+        identity: &Keyset,
         nonce: Option<String>,
     ) -> anyhow::Result<AttestationReport> {
         ensure!(
-            now_secs() < self.config.keyset_not_after,
+            !identity.keyset().is_expired_at(now_secs()),
             "expired service identity"
         );
         let nonce = nonce.context("challenge required")?;
@@ -102,15 +106,15 @@ impl Service {
                     .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
             "invalid challenge"
         );
-        let statement = attestation_statement(self.keyset.digest(), Some(&nonce))?;
+        let statement = attestation_statement(identity.digest(), Some(&nonce))?;
         let data = report_data(&statement);
         let evidence = self.attester.evidence(report_data_slot(data)).await?;
         Ok(AttestationReport {
             api_version: "aci/1".into(),
-            workload_keyset_digest: self.keyset.digest().into(),
+            workload_keyset_digest: identity.digest().into(),
             attestation: AttestationEnvelope {
                 tee_type: "tdx".into(),
-                workload_keyset: self.keyset.to_value(),
+                workload_keyset: identity.to_value(),
                 report_data_hex: hex::encode(data),
                 source_provenance: self.config.source_provenance.clone(),
                 evidence,
@@ -127,13 +131,14 @@ impl Service {
     /// Open a transformed application request through the same verified backend.
     pub(crate) async fn open_inference(
         &self,
+        identity: &Keyset,
         path: &str,
         requested_model: Option<&str>,
         received: &[u8],
         forwarded: Vec<u8>,
     ) -> anyhow::Result<(crate::inference::upstream::StreamResponse, PendingReceipt)> {
         ensure!(
-            now_secs() < self.config.keyset_not_after,
+            !identity.keyset().is_expired_at(now_secs()),
             "expired service identity"
         );
         let prepared = self.upstream.prepare(UpstreamRequest {
@@ -155,14 +160,14 @@ impl Service {
         let session = self.completions.session(
             &event,
             self.config.receipt_ttl_seconds,
-            self.config.keyset_not_after,
+            identity.keyset().not_after,
         )?;
         let id = uuid::Uuid::new_v4().to_string();
         let receipt = Receipt::new(
             crate::attestation::evidence::ReceiptRequest {
                 id: &id,
                 model: requested_model,
-                keyset: self.keyset.digest(),
+                keyset: identity.digest(),
                 path,
                 received,
                 forwarded: &prepared.request.body,

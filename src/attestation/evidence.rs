@@ -17,7 +17,7 @@ pub fn now_secs() -> u64 {
 
 pub struct ServiceConfig {
     pub source_provenance: SourceProvenance,
-    pub keyset_not_after: u64,
+    pub keyset_ttl_seconds: u64,
     pub subject: Option<String>,
     pub receipt_ttl_seconds: u64,
 }

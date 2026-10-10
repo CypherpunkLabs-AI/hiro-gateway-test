@@ -7,6 +7,7 @@ pub struct Config {
     pub inference: crate::inference::config::Config,
     pub auth: crate::auth::AuthConfig,
     pub bind_address: SocketAddr,
+    pub tls: crate::tls::Config,
     pub tdx_report_dir: PathBuf,
     pub attestation_dir: PathBuf,
     pub phala_base_url: String,
@@ -35,7 +36,7 @@ impl Config {
     /// # Errors
     /// Rejects invalid configuration or unavailable required confidential services.
     pub fn from_env() -> anyhow::Result<Self> {
-        let bind_address = value_or("HIRO_BIND_ADDRESS", "0.0.0.0:8080")
+        let bind_address = value_or("HIRO_BIND_ADDRESS", "0.0.0.0:8443")
             .parse()
             .context("HIRO_BIND_ADDRESS must be a socket address")?;
         let phala_base_url = required("PHALA_ACI_BASE_URL")?
@@ -58,6 +59,10 @@ impl Config {
             inference: crate::inference::config::Config::from_env()?,
             auth: crate::auth::AuthConfig::from_env()?,
             bind_address,
+            tls: crate::tls::Config::new(
+                required("HIRO_TLS_DOMAIN")?,
+                &value_or("HIRO_ACME_ENVIRONMENT", "production"),
+            )?,
             tdx_report_dir: value_or("HIRO_TDX_REPORT_DIR", "/run/hiro/tdx-report").into(),
             attestation_dir: value_or("HIRO_ATTESTATION_DIR", "/run/hiro/attestation").into(),
             phala_base_url,

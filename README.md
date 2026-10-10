@@ -1,8 +1,8 @@
 # Hiro Proxy
 
-Confidential application gateway for an Intel TDX guest on GCP. The container runs as UID/GID 65532, listens on port 8080, and uses Oak Session to encrypt application traffic end to end. Confidential Space is not used.
+Confidential application gateway for an Intel TDX guest on GCP. The container runs as UID/GID 65532, terminates TLS 1.3 on port 8443, and uses Oak Session to encrypt application traffic end to end. Hiro publishes this listener as TCP 443. Confidential Space is not used.
 
-The proxy generates independent ephemeral Ed25519 keys for Oak session binding and completion receipts. Keys remain in guest memory and change on process restart. There is no local KMS, dstack socket, evidence worker or persistent key volume. The separate Phala inference service is still verified using DCAP, its approved ACI identity and attested TLS public key before requests are forwarded.
+The proxy generates independent ephemeral Ed25519 keys for Oak session binding and completion receipts. Keys remain in guest memory and change on process restart. Separate ECDSA P-256 TLS keys and ACME account state are generated inside the guest and cached only in its private, non-swappable tmpfs. There is no local KMS, dstack socket, evidence worker or persistent key volume. The separate Phala inference service is still verified using DCAP, its approved ACI identity and attested TLS public key before requests are forwarded.
 
 | Endpoint | Behavior |
 | --- | --- |
@@ -12,6 +12,12 @@ The proxy generates independent ephemeral Ed25519 keys for Oak session binding a
 | `GET /v1/session` | Oak carrier; WebSocket subprotocol `cypherpunk-session-v1` |
 
 Application routes are accessible only inside Oak. Missing hardware, an unmeasured release or failed upstream verification never enables plaintext or unverified forwarding. `.env.example` contains public dummy values that allow the process to boot; application requests cannot succeed with them.
+
+All public endpoints require HTTPS/WSS and an issued certificate. `HIRO_TLS_DOMAIN` selects the hostname; the Hiro release pins `api.cypherpunklabs.io`. Point DNS directly at the VM and allow inbound TCP 443 and outbound HTTPS for ACME. Use DNS-only mode for any CDN DNS record, or a TCP passthrough load balancer; external TLS termination is incompatible with this deployment. `HIRO_ACME_ENVIRONMENT` accepts `production` or `staging` (staging certificates are not browser-trusted).
+
+The embedded `rustls-acme` client handles TLS-ALPN-01, renewal and issuance backoff. Until it has a valid certificate, the listener fails closed; there is no self-signed or HTTP fallback. TLS 1.2, early data/0-RTT, TLS key logging, secret extraction and session resumption are disabled. Certificate replacement affects new connections; each existing connection retains its attested TLS keyset and receipt identity until expiration. ACME dependency response logging is suppressed.
+
+Mount `/run/hiro/tls` as a dedicated `tmpfs` with `noswap,nosuid,nodev,noexec,mode=0700,uid=65532,gid=65532`; cache files use `0600`. The proxy rejects disk-backed cache storage and enabled swap. This mount survives container restarts, but VM restart destroys it and requires certificate reissuance. Never copy TLS keys to `secrets.env`, an image, or a persistent volume. Full-VM restart frequency remains subject to the CA's issuance limits.
 
 ## Runtime integration
 

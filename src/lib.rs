@@ -6,4 +6,5 @@ pub mod config;
 pub mod inference;
 pub mod services;
 pub mod storage;
+pub mod tls;
 pub mod transport;
